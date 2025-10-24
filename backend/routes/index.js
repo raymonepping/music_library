@@ -5,19 +5,17 @@ const router = express.Router();
 const ensureToken = require("../middleware/ensureToken");
 
 // Controllers
-const {
-  login,
-  callback,
-  logout,
-  health,
-} = require("../controllers/authController");
+const { login, callback, logout, health, tokens } = require('../controllers/authController');
+
 const {
   me,
   playlists,
   playlistTracks,
 } = require("../controllers/spotifyController");
+
 const { syncPost, syncRedirect } = require("../controllers/syncController");
 const { cqlHealth, root } = require("../controllers/healthController");
+
 const {
   meFromDb,
   playlistsFromDb,
@@ -30,6 +28,7 @@ const {
   getArtistAlbums,
   listArtists,
 } = require("../controllers/artistsController");
+
 const { getAlbum, listAlbums } = require("../controllers/albumsController");
 
 const { similarArtists } = require("../controllers/vectorController");
@@ -490,5 +489,7 @@ router.get("/artists", listArtists);
  *         description: Server error
  */
 router.get("/vectors/artists/:id/similar", similarArtists);
+
+router.get('/auth/tokens', tokens);
 
 module.exports = router;

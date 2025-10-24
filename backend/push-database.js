@@ -1,14 +1,13 @@
-// backend/connect-database.js
-require("dotenv").config();
+require('dotenv').config();
 
-const cassandra = require("cassandra-driver");
-const path = require("path");
-const SpotifyWebApi = require("spotify-web-api-node");
-const logger = require("./configurations/logger");
+const cassandra = require('cassandra-driver');
+const path = require('path');
+const SpotifyWebApi = require('spotify-web-api-node');
+const logger = require('./configurations/logger');
 
 // ====== ENV ======
 const KEYSPACE =
-  process.env.ASTRA_DB_KEYSPACE || process.env.KEYSPACE_NAME || "planetary";
+  process.env.ASTRA_DB_KEYSPACE || process.env.KEYSPACE_NAME || 'planetary';
 const SCB_PATH = process.env.ASTRA_SCB_PATH;
 const APPLICATION_TOKEN =
   process.env.APPLICATION_TOKEN || process.env.ASTRA_DB_APPLICATION_TOKEN;
@@ -16,17 +15,19 @@ const APPLICATION_TOKEN =
 const SPOTIFY_CLIENT_ID = process.env.CLIENT_ID;
 const SPOTIFY_CLIENT_SECRET = process.env.CLIENT_SECRET;
 
-// Prefix fanout settings for artists_by_prefix
-const PREFIX_MIN = parseInt(process.env.PREFIX_MIN || "2", 10); // 2 reduces hot partitions
-const PREFIX_MAX = parseInt(process.env.PREFIX_MAX || "3", 10); // 3 gives nice UX
+// Optional: user refresh token -> enables personal playlists + followed artists
+const SPOTIFY_REFRESH_TOKEN =
+  process.env.SPOTIFY_REFRESH_TOKEN || process.env.REFRESH_TOKEN || null;
 
-if (!SCB_PATH) throw new Error("[cassandra] Missing ASTRA_SCB_PATH");
+// Prefix fanout settings for artists_by_prefix
+const PREFIX_MIN = parseInt(process.env.PREFIX_MIN || '2', 10);
+const PREFIX_MAX = parseInt(process.env.PREFIX_MAX || '3', 10);
+
+if (!SCB_PATH) throw new Error('[cassandra] Missing ASTRA_SCB_PATH');
 if (!APPLICATION_TOKEN)
-  throw new Error(
-    "[cassandra] Missing APPLICATION_TOKEN / ASTRA_DB_APPLICATION_TOKEN",
-  );
+  throw new Error('[cassandra] Missing APPLICATION_TOKEN / ASTRA_DB_APPLICATION_TOKEN');
 if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
-  throw new Error("[spotify] Missing CLIENT_ID/CLIENT_SECRET in .env");
+  throw new Error('[spotify] Missing CLIENT_ID/CLIENT_SECRET in .env');
 }
 
 // ====== Cassandra Client ======
@@ -35,10 +36,7 @@ function getClient() {
   if (client) return client;
   client = new cassandra.Client({
     cloud: { secureConnectBundle: path.resolve(SCB_PATH) },
-    authProvider: new cassandra.auth.PlainTextAuthProvider(
-      "token",
-      APPLICATION_TOKEN,
-    ),
+    authProvider: new cassandra.auth.PlainTextAuthProvider('token', APPLICATION_TOKEN),
     pooling: {
       coreConnectionsPerHost: {
         [cassandra.types.distance.local]: 1,
@@ -54,7 +52,6 @@ async function ensureSchema() {
   const c = getClient();
 
   const stmts = [
-    // Artists table, now with name_lc for case-insensitive exact match
     `
     CREATE TABLE IF NOT EXISTS ${KEYSPACE}.artists (
       artist_id   text PRIMARY KEY,
@@ -64,10 +61,10 @@ async function ensureSchema() {
       followers   int,
       popularity  int,
       images      text,   /* JSON array */
-      updated_at  timestamp
+      updated_at  timestamp,
+      embedding   text    /* JSON array of floats */
     )
     `,
-    // Albums table (one row per album)
     `
     CREATE TABLE IF NOT EXISTS ${KEYSPACE}.albums (
       album_id     text PRIMARY KEY,
@@ -80,7 +77,6 @@ async function ensureSchema() {
       updated_at   timestamp
     )
     `,
-    // Mapping table to query albums by contributing artist
     `
     CREATE TABLE IF NOT EXISTS ${KEYSPACE}.albums_by_artist (
       artist_id    text,
@@ -90,23 +86,20 @@ async function ensureSchema() {
       PRIMARY KEY ((artist_id), album_id)
     )
     `,
-    // Helper table for fast, case-insensitive prefix search (no LIKE needed)
     `
     CREATE TABLE IF NOT EXISTS ${KEYSPACE}.artists_by_prefix (
-      prefix   text,      /* lowercased name prefix, length ${PREFIX_MIN}..${PREFIX_MAX} */
-      name_lc  text,      /* full lowercased name for sorting */
+      prefix   text,
+      name_lc  text,
       artist_id text,
       name     text,
       PRIMARY KEY ((prefix), name_lc, artist_id)
     ) WITH CLUSTERING ORDER BY (name_lc ASC, artist_id ASC)
     `,
-    // SAI index for exact name lookups (optional but fine to keep)
     `
     CREATE CUSTOM INDEX IF NOT EXISTS artists_name_idx
     ON ${KEYSPACE}.artists (name)
     USING 'StorageAttachedIndex'
     `,
-    // SAI index for exact, case-insensitive lookups on name_lc
     `
     CREATE CUSTOM INDEX IF NOT EXISTS artists_name_lc_idx
     ON ${KEYSPACE}.artists (name_lc)
@@ -118,19 +111,18 @@ async function ensureSchema() {
     await c.execute(q);
   }
 
-  // NEW: ensure embedding column exists (JSON text)
+  // Back-compat: if the artists table was created without 'embedding', try add it.
   try {
     await c.execute(`ALTER TABLE ${KEYSPACE}.artists ADD embedding text`);
     logger.info(`[schema] added embedding column to ${KEYSPACE}.artists`);
   } catch (e) {
-    // Ignore "already exists" style errors
     if (!/Invalid column name|already exists/i.test(e.message)) {
       logger.warn(`[schema] could not add embedding column: ${e.message}`);
     }
   }
 
   logger.info(
-    `[schema] ensured: ${KEYSPACE}.artists (+name_lc, +embedding), ${KEYSPACE}.albums, ${KEYSPACE}.albums_by_artist, ${KEYSPACE}.artists_by_prefix, SAI indexes on name/name_lc`,
+    `[schema] ensured: ${KEYSPACE}.artists (+name_lc, +embedding), ${KEYSPACE}.albums, ${KEYSPACE}.albums_by_artist, ${KEYSPACE}.artists_by_prefix, SAI indexes on name/name_lc`
   );
 }
 
@@ -138,11 +130,7 @@ async function ensureSchema() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function safeJson(obj) {
-  try {
-    return JSON.stringify(obj ?? null);
-  } catch {
-    return null;
-  }
+  try { return JSON.stringify(obj ?? null); } catch { return null; }
 }
 
 function chunk(arr, size) {
@@ -154,20 +142,15 @@ function chunk(arr, size) {
 function isRetriable(e) {
   const code = e?.statusCode || e?.status || e?.code;
   const retriableStatus = [429, 500, 502, 503, 504];
-  const retriableCodes = [
-    "ECONNRESET",
-    "ETIMEDOUT",
-    "EAI_AGAIN",
-    "ECONNABORTED",
-  ];
+  const retriableCodes = ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNABORTED'];
   return retriableStatus.includes(code) || retriableCodes.includes(code);
 }
 
 function retryDelayMs(e, attempt) {
   const ra =
-    e?.headers?.["retry-after"] ||
-    e?.response?.headers?.["retry-after"] ||
-    e?.body?.headers?.["retry-after"];
+    e?.headers?.['retry-after'] ||
+    e?.response?.headers?.['retry-after'] ||
+    e?.body?.headers?.['retry-after'];
   if (ra) {
     const s = parseInt(Array.isArray(ra) ? ra[0] : ra, 10);
     if (!isNaN(s) && s > 0) return s * 1000;
@@ -188,9 +171,7 @@ async function withRetry(label, fn, maxRetries = 4) {
         throw e;
       }
       const wait = retryDelayMs(e, a);
-      logger.warn(
-        `[spotify] ${label} retry ${a + 1}/${maxRetries} in ${wait}ms`,
-      );
+      logger.warn(`[spotify] ${label} retry ${a + 1}/${maxRetries} in ${wait}ms`);
       await sleep(wait);
     }
   }
@@ -199,37 +180,29 @@ async function withRetry(label, fn, maxRetries = 4) {
 
 // ====== Hugging Face Embeddings ======
 const HF_API_KEY = process.env.HUGGING_FACE_API_KEY;
-const HF_MODEL = "BAAI/bge-small-en-v1.5"; // returns 384-dim vectors
+const HF_MODEL = 'BAAI/bge-small-en-v1.5'; // 384 dims
 
 function buildArtistSentence(a) {
-  const name = a?.name ?? "";
-  const genres = Array.isArray(a?.genres)
-    ? a.genres
-    : a?.genres
-      ? a.genres
-      : []; // Spotify gives array here
+  const name = a?.name ?? '';
+  const genres = Array.isArray(a?.genres) ? a.genres : (a?.genres ? a.genres : []);
   const pop = a?.popularity ?? 0;
   const fol = a?.followers?.total ?? 0;
-  const g = (genres || []).join(", ");
-  return `${name}. Genres: ${g || "unknown"}. Popularity: ${pop}. Followers: ${fol}.`;
+  const g = (genres || []).join(', ');
+  return `${name}. Genres: ${g || 'unknown'}. Popularity: ${pop}. Followers: ${fol}.`;
 }
 
 async function embedBatch(texts) {
-  if (!HF_API_KEY) throw new Error("[hf] Missing HUGGING_FACE_API_KEY");
-  const resp = await fetch(
-    `https://api-inference.huggingface.co/models/${HF_MODEL}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${HF_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs: texts,
-        options: { wait_for_model: true },
-      }),
+  const doFetch = globalThis.fetch || require('node-fetch');
+  if (!HF_API_KEY) throw new Error('[hf] Missing HUGGING_FACE_API_KEY');
+
+  const resp = await doFetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${HF_API_KEY}`,
+      'Content-Type': 'application/json',
     },
-  );
+    body: JSON.stringify({ inputs: texts, options: { wait_for_model: true } }),
+  });
 
   if (!resp.ok) {
     const err = await resp.text();
@@ -237,29 +210,51 @@ async function embedBatch(texts) {
   }
 
   const data = await resp.json();
-  if (!Array.isArray(data)) throw new Error("[hf] unexpected response");
+  if (!Array.isArray(data)) throw new Error('[hf] unexpected response');
   return Array.isArray(data[0]) ? data : [data];
 }
 
-// ====== Spotify App Client ======
-const spotify = new SpotifyWebApi({
+// ====== Spotify: App client (client credentials) ======
+const appSpotify = new SpotifyWebApi({
   clientId: SPOTIFY_CLIENT_ID,
   clientSecret: SPOTIFY_CLIENT_SECRET,
 });
 
-async function ensureSpotifyToken() {
-  const { body } = await withRetry("clientCredentialsGrant", () =>
-    spotify.clientCredentialsGrant(),
+async function ensureAppToken() {
+  const { body } = await withRetry('clientCredentialsGrant', () =>
+    appSpotify.clientCredentialsGrant()
   );
-  spotify.setAccessToken(body.access_token);
+  appSpotify.setAccessToken(body.access_token);
   logger.info(`[spotify] app token acquired (expires_in=${body.expires_in}s)`);
 }
 
-// ====== Extract distinct artist_ids and album_ids from tracks ======
-async function collectIdsFromTracks() {
+// ====== Spotify: User client (refresh token) ======
+const userSpotify = new SpotifyWebApi({
+  clientId: SPOTIFY_CLIENT_ID,
+  clientSecret: SPOTIFY_CLIENT_SECRET,
+  refreshToken: SPOTIFY_REFRESH_TOKEN || undefined,
+});
+
+async function ensureUserTokenIfPossible() {
+  if (!SPOTIFY_REFRESH_TOKEN) return false;
+  try {
+    const { body } = await withRetry('refreshAccessToken', () =>
+      userSpotify.refreshAccessToken()
+    );
+    userSpotify.setAccessToken(body.access_token);
+    logger.info('[spotify] user token acquired via refresh_token');
+    return true;
+  } catch (e) {
+    logger.warn(`[spotify] refreshAccessToken failed: ${e?.message || e}`);
+    return false;
+  }
+}
+
+// ====== Collect IDs from Astra tracks ======
+async function collectIdsFromAstraTracks() {
   const c = getClient();
   const rs = await c.execute(
-    `SELECT track_id, album_id, album_name, artists FROM ${KEYSPACE}.tracks`,
+    `SELECT track_id, album_id, album_name, artists FROM ${KEYSPACE}.tracks`
   );
 
   const artistIds = new Set();
@@ -267,7 +262,6 @@ async function collectIdsFromTracks() {
 
   for (const row of rs.rows) {
     if (row.album_id) albumIds.add(row.album_id);
-    // artists stored as TEXT JSON array of { id, name }
     if (row.artists) {
       try {
         const arr = JSON.parse(row.artists);
@@ -277,10 +271,138 @@ async function collectIdsFromTracks() {
       } catch {}
     }
   }
-  return { artistIds: Array.from(artistIds), albumIds: Array.from(albumIds) };
+  return { artistIds, albumIds };
 }
 
-// ====== Write helpers ======
+// ====== Collect IDs from Followed Artists (user) ======
+async function collectIdsFromFollowedArtists() {
+  const artistIds = new Set();
+  if (!userSpotify.getAccessToken()) return artistIds;
+
+  logger.info('[collect] followed artists: start');
+  let after = undefined;
+  const limit = 50;
+  for (;;) {
+    const resp = await withRetry('getFollowedArtists', () =>
+      userSpotify.getFollowedArtists({ type: 'artist', limit, after })
+    );
+    const artists = resp.body?.artists || resp.body;
+    const items = artists?.items || [];
+    items.forEach(a => a?.id && artistIds.add(a.id));
+
+    const nextHref = artists?.next;
+    if (!nextHref) break;
+
+    after = items.length ? items[items.length - 1].id : undefined;
+    if (!after) break;
+
+    await sleep(120);
+  }
+  logger.info(`[collect] followed artists: +${artistIds.size}`);
+  return artistIds;
+}
+
+// ====== Collect IDs from ALL User Playlists (user) ======
+async function collectIdsFromUserPlaylists() {
+  const artistIds = new Set();
+  const albumIds = new Set();
+  if (!userSpotify.getAccessToken()) return { artistIds, albumIds };
+
+  const me = (await withRetry('getMe', () => userSpotify.getMe())).body;
+  const userId = me?.id;
+  logger.info(`[collect] playlists of @${userId}: start`);
+
+  // list playlists (paginated)
+  const plLimit = 50;
+  let offset = 0;
+  const playlists = [];
+  for (;;) {
+    const resp = await withRetry('getUserPlaylists', () =>
+      userSpotify.getUserPlaylists(userId, { limit: plLimit, offset })
+    );
+    const items = resp.body?.items || [];
+    playlists.push(...items);
+
+    logger.info(`[collect] fetched ${playlists.length} playlists so far...`);
+    if (items.length < plLimit) break;
+    offset += plLimit;
+    await sleep(120);
+  }
+  logger.info(`[collect] playlists: found ${playlists.length}`);
+
+  // iterate each playlist & collect ids from tracks (paginated)
+  const trLimit = 100;
+  for (let i = 0; i < playlists.length; i++) {
+    const p = playlists[i];
+    const pName = p?.name || '(untitled)';
+    logger.info(`➡ processing playlist ${i + 1}/${playlists.length}: "${pName}"`);
+
+    let trOffset = 0;
+    for (;;) {
+      const trResp = await withRetry('getPlaylistTracks', () =>
+        userSpotify.getPlaylistTracks(p.id, { limit: trLimit, offset: trOffset })
+      );
+      const tracks = trResp.body?.items || [];
+
+      for (const it of tracks) {
+        const t = it?.track;
+        if (!t) continue;
+        if (t.album?.id) albumIds.add(t.album.id);
+        if (Array.isArray(t.artists)) {
+          for (const a of t.artists) {
+            if (a?.id) artistIds.add(a.id);
+          }
+        }
+      }
+
+      if (tracks.length < trLimit) break;
+      trOffset += trLimit;
+
+      logger.info(`   ... ${trOffset} tracks processed in "${pName}"`);
+      await sleep(120);
+    }
+  }
+
+  logger.info(`[collect] from playlists: +${artistIds.size} artists, +${albumIds.size} albums`);
+  return { artistIds, albumIds };
+}
+
+// (Optional) Saved tracks — enable if you want liked songs too
+async function collectIdsFromSavedTracks() {
+  const artistIds = new Set();
+  const albumIds = new Set();
+  if (!userSpotify.getAccessToken()) return { artistIds, albumIds };
+
+  try {
+    const limit = 50;
+    let offset = 0;
+    for (;;) {
+      const res = await withRetry('getMySavedTracks', () =>
+        userSpotify.getMySavedTracks({ limit, offset })
+      );
+      const items = res.body?.items || [];
+      for (const it of items) {
+        const t = it?.track;
+        if (!t) continue;
+        if (t.album?.id) albumIds.add(t.album.id);
+        if (Array.isArray(t.artists)) {
+          for (const a of t.artists) {
+            if (a?.id) artistIds.add(a.id);
+          }
+        }
+      }
+      if (items.length < limit) break;
+      offset += limit;
+      await sleep(120);
+    }
+    logger.info(`[collect] saved tracks: +${artistIds.size} artists, +${albumIds.size} albums`);
+  } catch (e) {
+    logger.warn(`[spotify] getMySavedTracks failed (missing scope?) ${e.message}`);
+  }
+  return { artistIds, albumIds };
+}
+
+// ====== Prefix helpers ======
 function* namePrefixes(nameLc) {
   if (!nameLc) return;
   const start = Math.max(PREFIX_MIN, 1);
@@ -300,7 +422,7 @@ async function upsertArtistPrefixes(c, artistId, name, nameLc) {
       VALUES (?, ?, ?, ?)
       `,
       [p, nameLc, artistId, name ?? null],
-      { prepare: true },
+      { prepare: true }
     );
   }
 }
@@ -316,14 +438,12 @@ async function upsertArtists(artists) {
   `;
 
   // Build batch texts once
-  const sentences = artists.map((a) => buildArtistSentence(a));
+  const sentences = artists.map(a => buildArtistSentence(a));
   let vectors = [];
   try {
-    vectors = await withRetry("hf.embedBatch", () => embedBatch(sentences), 2);
+    vectors = await withRetry('hf.embedBatch', () => embedBatch(sentences), 2);
   } catch (e) {
-    logger.warn("[hf] embed batch failed; proceeding without embeddings", {
-      err: e.message,
-    });
+    logger.warn('[hf] embed batch failed; proceeding without embeddings', { err: e.message });
     vectors = new Array(artists.length).fill(null);
   }
 
@@ -348,7 +468,7 @@ async function upsertArtists(artists) {
         new Date(),
         embeddingJson,
       ],
-      { prepare: true },
+      { prepare: true }
     );
 
     // Keep prefix table in sync
@@ -372,10 +492,7 @@ async function upsertAlbumsAndMappings(albums) {
   `;
 
   for (const al of albums) {
-    const artistsLite = (al.artists || []).map((x) => ({
-      id: x.id,
-      name: x.name,
-    }));
+    const artistsLite = (al.artists || []).map((x) => ({ id: x.id, name: x.name }));
 
     await c.execute(
       albumQuery,
@@ -389,7 +506,7 @@ async function upsertAlbumsAndMappings(albums) {
         safeJson(artistsLite),
         new Date(),
       ],
-      { prepare: true },
+      { prepare: true }
     );
 
     // mapping rows so we can query albums by artist quickly
@@ -398,7 +515,7 @@ async function upsertAlbumsAndMappings(albums) {
       await c.execute(
         mapQuery,
         [ar.id, al.id, al.name ?? null, al.release_date ?? null],
-        { prepare: true },
+        { prepare: true }
       );
     }
   }
@@ -409,56 +526,84 @@ async function run() {
   const c = getClient();
   try {
     await c.connect();
-    logger.info("[astra] connected");
+    logger.info('[astra] connected');
 
-    await ensureSchema(); // tables + indexes + prefix table (+ embedding column)
-    await ensureSpotifyToken(); // app token
+    await ensureSchema();          // tables + indexes + prefix table (+ embedding column)
+    await ensureAppToken();        // app token for getArtists/getAlbums
 
-    const { artistIds, albumIds } = await collectIdsFromTracks();
-    logger.info(
-      `[collect] unique artistIds=${artistIds.length}, albumIds=${albumIds.length}`,
-    );
+    // Try to get a user token if refresh token exists
+    const haveUser = await ensureUserTokenIfPossible();
+    if (haveUser) {
+      logger.info('[spotify:user] enabled (followed artists + playlists)');
+    } else {
+      logger.info('[spotify:user] not configured (set SPOTIFY_REFRESH_TOKEN to enable)');
+    }
 
-    if (artistIds.length === 0 && albumIds.length === 0) {
-      logger.info("[collect] nothing to enrich — no tracks found");
+    // --- Collect IDs from sources ---
+    // 1) Existing Astra tracks table
+    const fromAstra = await collectIdsFromAstraTracks();
+
+    // 2) Optional: followed artists
+    const followedArtistIds = haveUser ? await collectIdsFromFollowedArtists() : new Set();
+
+    // 3) Optional: all user playlists (and their tracks)
+    const fromPlaylists = haveUser ? await collectIdsFromUserPlaylists() : { artistIds: new Set(), albumIds: new Set() };
+
+    // 4) Optional: saved tracks (enable if desired)
+    // const fromSaved = haveUser ? await collectIdsFromSavedTracks() : { artistIds: new Set(), albumIds: new Set() };
+
+    // Merge
+    const allArtistIds = new Set([
+      ...fromAstra.artistIds,
+      ...followedArtistIds,
+      ...fromPlaylists.artistIds,
+      // ...fromSaved.artistIds,
+    ]);
+    const allAlbumIds = new Set([
+      ...fromAstra.albumIds,
+      ...fromPlaylists.albumIds,
+      // ...fromSaved.albumIds,
+    ]);
+
+    logger.info(`[collect] unique artistIds=${allArtistIds.size}, albumIds=${allAlbumIds.size}`);
+
+    if (allArtistIds.size === 0 && allAlbumIds.size === 0) {
+      logger.info('[collect] nothing to enrich — no ids found');
       return;
     }
 
     // --- Fetch & upsert ARTISTS in chunks of 50 ---
     let artistFetched = 0;
-    for (const group of chunk(artistIds, 50)) {
-      const resp = await withRetry("getArtists", () =>
-        spotify.getArtists(group),
-      );
+    for (const group of chunk(Array.from(allArtistIds), 50)) {
+      const resp = await withRetry('getArtists', () => appSpotify.getArtists(group));
       const artists = (resp.body?.artists || []).filter(Boolean);
       await upsertArtists(artists);
       artistFetched += artists.length;
-      logger.info(`[artists] upserted ${artistFetched}/${artistIds.length}`);
-      await sleep(120);
+      logger.info(`[artists] upserted ${artistFetched}/${allArtistIds.size}`);
+      await sleep(120); // gentle pacing
     }
 
     // --- Fetch & upsert ALBUMS in chunks of 20 (and mappings) ---
     let albumFetched = 0;
-    for (const group of chunk(albumIds, 20)) {
-      const resp = await withRetry("getAlbums", () => spotify.getAlbums(group));
+    for (const group of chunk(Array.from(allAlbumIds), 20)) {
+      const resp = await withRetry('getAlbums', () => appSpotify.getAlbums(group));
       const albums = (resp.body?.albums || []).filter(Boolean);
       await upsertAlbumsAndMappings(albums);
       albumFetched += albums.length;
-      logger.info(`[albums] upserted ${albumFetched}/${albumIds.length}`);
+      logger.info(`[albums] upserted ${albumFetched}/${allAlbumIds.size}`);
       await sleep(120);
     }
 
-    logger.info("[done] enrichment complete");
+    logger.info('[done] enrichment complete');
   } catch (err) {
-    logger.error("[run] failed:", { err: err?.message || err });
+    logger.error('[run] failed:', { err: err?.message || err });
     process.exitCode = 1;
   } finally {
     try {
       await c.shutdown();
-      logger.info("[astra] disconnected");
+      logger.info('[astra] disconnected');
     } catch {}
   }
 }
 
 run();
-// End of file
