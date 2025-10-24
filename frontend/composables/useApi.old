@@ -1,0 +1,47 @@
+// composables/useApi.ts
+
+export type FetchOpts = Parameters<typeof useFetch>[1]
+
+// Old behavior: useApi('/path', opts) -> returns useFetch result
+export function useApiFetch<T = any>(path: string, opts: FetchOpts = {}) {
+  const config = useRuntimeConfig()
+  const url = computed(() => `${config.public.apiBase}${path}`)
+  return useFetch<T>(url, {
+    key: url.value,
+    credentials: 'include', // send session cookie
+    ...opts
+  })
+}
+
+// New behavior: const api = useApi(); api.get('/path')
+// Always include cookies to carry the Express session
+export function useApi() {
+  const config = useRuntimeConfig()
+  const base = config.public.apiBase
+  const backendBase = config.public.backendBase
+
+  const common = { credentials: 'include' as const }
+
+  return {
+    // generic helpers
+    get:  <T>(p: string, q?: any) =>
+      $fetch<T>(`${base}${p}`, { ...common, query: q }),
+
+    post: <T>(p: string, b?: any) =>
+      $fetch<T>(`${base}${p}`, { ...common, method: 'POST', body: b }),
+
+    put:  <T>(p: string, b?: any) =>
+      $fetch<T>(`${base}${p}`, { ...common, method: 'PUT', body: b }),
+
+    del:  <T>(p: string) =>
+      $fetch<T>(`${base}${p}`, { ...common, method: 'DELETE' }),
+
+    // spotify helpers
+    login: () => window.location.assign(`${backendBase}/auth/login`),
+    me:    () => $fetch(`${base}/me`, { ...common }),
+    playlists: () => $fetch(`${base}/playlists`, { ...common }),
+    playlistTracks: (id: string) =>
+      $fetch(`${base}/playlists/${id}/tracks`, { ...common }),
+    sync: () => $fetch(`${base}/sync/spotify`, { ...common, method: 'POST' })
+  }
+}
