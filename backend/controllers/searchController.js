@@ -44,12 +44,9 @@ async function searchArtists(req, res) {
       );
     }
 
-    return res
-      .status(400)
-      .json({
-        error:
-          "Use ?name= for exact case-insensitive or ?prefix= with 2+ chars",
-      });
+    return res.status(400).json({
+      error: "Use ?name= for exact case-insensitive or ?prefix= with 2+ chars",
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message || String(e) });
   }
