@@ -1,6 +1,6 @@
 // backend/controllers/searchController.js
 const { getClient, KEYSPACE } = require("../services/cassandra");
-const logger = require('../configurations/logger');
+const logger = require("../configurations/logger");
 
 const norm = (s) => (s || "").toLowerCase().trim();
 
@@ -31,7 +31,9 @@ async function searchArtists(req, res) {
   try {
     if (name) {
       const rs = await client.execute(Q_EXACT(ks), [name], { prepare: true });
-      return res.json(rs.rows.map(r => ({ artist_id: r.artist_id, name: r.name })));
+      return res.json(
+        rs.rows.map((r) => ({ artist_id: r.artist_id, name: r.name })),
+      );
     }
 
     if (prefix && prefix.length >= 2) {
@@ -42,16 +44,19 @@ async function searchArtists(req, res) {
         fetchSize: limit,
       });
       return res.json(
-        rs.rows.slice(0, limit).map(r => ({ artist_id: r.artist_id, name: r.name }))
+        rs.rows
+          .slice(0, limit)
+          .map((r) => ({ artist_id: r.artist_id, name: r.name })),
       );
     }
 
     return res.status(400).json({
-      error: "Use ?name= for exact (case-insensitive) or ?prefix= with 2+ chars",
+      error:
+        "Use ?name= for exact (case-insensitive) or ?prefix= with 2+ chars",
     });
   } catch (e) {
-    logger.error('[api] searchArtists failed', { err: e?.message || e });
-    return res.status(500).json({ error: 'internal error' });
+    logger.error("[api] searchArtists failed", { err: e?.message || e });
+    return res.status(500).json({ error: "internal error" });
   }
 }
 
@@ -67,11 +72,14 @@ async function searchArtistsExact(req, res) {
 
   try {
     const rs = await client.execute(Q_EXACT(ks), [q], { prepare: true });
-    const items = rs.rows.map(r => ({ artist_id: r.artist_id, name: r.name }));
+    const items = rs.rows.map((r) => ({
+      artist_id: r.artist_id,
+      name: r.name,
+    }));
     return res.json(items);
   } catch (e) {
-    logger.error('[api] searchArtistsExact failed', { err: e?.message || e });
-    return res.status(500).json({ error: 'internal error' });
+    logger.error("[api] searchArtistsExact failed", { err: e?.message || e });
+    return res.status(500).json({ error: "internal error" });
   }
 }
 
@@ -83,8 +91,8 @@ async function searchArtistsExact(req, res) {
 async function searchArtistsPrefixSAI(req, res) {
   const client = getClient();
   const ks = KEYSPACE();
-  const q = (req.query.q || '').trim().toLowerCase();
-  const limit = Math.min(parseInt(req.query.limit || '20', 10), 200);
+  const q = (req.query.q || "").trim().toLowerCase();
+  const limit = Math.min(parseInt(req.query.limit || "20", 10), 200);
 
   if (!q) return res.json([]);
 
@@ -99,7 +107,7 @@ async function searchArtistsPrefixSAI(req, res) {
          WHERE prefix = ?
          LIMIT ?`,
         [prefix, limit],
-        { prepare: true }
+        { prepare: true },
       );
     } else {
       // Use SAI with ALLOW FILTERING for longer prefixes
@@ -112,27 +120,31 @@ async function searchArtistsPrefixSAI(req, res) {
          LIMIT ${limit}
          ALLOW FILTERING`,
         [start, end],
-        { prepare: true }
+        { prepare: true },
       );
     }
 
     const items = rs.rows
-      .sort((a, b) => (a.name_lc || '').localeCompare(b.name_lc || ''))
-      .map(r => ({
+      .sort((a, b) => (a.name_lc || "").localeCompare(b.name_lc || ""))
+      .map((r) => ({
         artist_id: r.artist_id,
         name: r.name,
         image_url: (() => {
           try {
-            const arr = JSON.parse(r.images || '[]');
+            const arr = JSON.parse(r.images || "[]");
             return Array.isArray(arr) && arr[0]?.url ? arr[0].url : null;
-          } catch { return null; }
-        })()
+          } catch {
+            return null;
+          }
+        })(),
       }));
 
     return res.json(items);
   } catch (e) {
-    logger.error('[api] searchArtistsPrefixSAI failed', { err: e?.message || e });
-    return res.status(500).json({ error: e?.message || 'internal error' });
+    logger.error("[api] searchArtistsPrefixSAI failed", {
+      err: e?.message || e,
+    });
+    return res.status(500).json({ error: e?.message || "internal error" });
   }
 }
 
