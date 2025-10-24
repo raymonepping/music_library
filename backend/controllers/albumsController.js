@@ -50,7 +50,9 @@ async function listAlbums(req, res) {
 
   // paging + optional in-page sort
   const limitRaw = Number.parseInt(req.query.limit ?? "50", 10);
-  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+  const limit = Number.isFinite(limitRaw)
+    ? Math.min(Math.max(limitRaw, 1), 200)
+    : 50;
   const pageState = req.query.page_state || null;
 
   const sort = (req.query.sort || "").toLowerCase(); // 'name' supported
