@@ -5,7 +5,13 @@ const router = express.Router();
 const ensureToken = require("../middleware/ensureToken");
 
 // Controllers
-const { login, callback, logout, health, tokens } = require('../controllers/authController');
+const {
+  login,
+  callback,
+  logout,
+  health,
+  tokens,
+} = require("../controllers/authController");
 
 const {
   me,
@@ -490,6 +496,6 @@ router.get("/artists", listArtists);
  */
 router.get("/vectors/artists/:id/similar", similarArtists);
 
-router.get('/auth/tokens', tokens);
+router.get("/auth/tokens", tokens);
 
 module.exports = router;
