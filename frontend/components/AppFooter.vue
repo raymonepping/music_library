@@ -10,6 +10,7 @@
         <NuxtLink to="/contact" class="hover:text-cloud transition">Contact</NuxtLink>
         <NuxtLink to="/privacy" class="hover:text-cloud transition">Privacy</NuxtLink>
         <NuxtLink to="/terms" class="hover:text-cloud transition">Terms</NuxtLink>
+        <NuxtLink to="/stats" class="hover:text-cloud transition">Stats</NuxtLink>
       </div>
 
       <div class="flex items-center gap-3">

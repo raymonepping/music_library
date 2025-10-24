@@ -1,5 +1,8 @@
 // backend/controllers/searchController.js
 const { getClient, KEYSPACE } = require("../services/cassandra");
+const logger = require('../configurations/logger');
+
+function normalizeTerm(s) { return (s || '').trim().toLowerCase(); }
 
 const norm = (s) => (s || "").toLowerCase().trim();
 
@@ -52,4 +55,49 @@ async function searchArtists(req, res) {
   }
 }
 
-module.exports = { searchArtists };
+async function searchArtistsPrefixSAI(req, res) {
+  const client = getClient();
+  const ks = KEYSPACE();
+  const raw = req.query.q || '';
+  const limit = Math.min(parseInt(req.query.limit || '20', 10), 200);
+  const q = normalizeTerm(raw);
+
+  if (!q) return res.json([]);
+
+  // Range to emulate prefix: [q .. q + U+FFFF]
+  const start = q;
+  const end = `${q}\uffff`;
+
+  try {
+    const rs = await client.execute(
+      `
+      SELECT artist_id, name, name_lc, images
+      FROM ${ks}.artists
+      WHERE name_lc >= ? AND name_lc < ?
+      LIMIT ?
+      `,
+      [start, end, limit],
+      { prepare: true }
+    );
+
+    const items = rs.rows
+      .sort((a, b) => (a.name_lc || '').localeCompare(b.name_lc || ''))
+      .map(r => ({
+        artist_id: r.artist_id,
+        name: r.name,
+        image_url: (() => {
+          try {
+            const arr = JSON.parse(r.images || '[]');
+            return Array.isArray(arr) && arr[0]?.url ? arr[0].url : null;
+          } catch { return null; }
+        })()
+      }));
+
+    return res.json(items);
+  } catch (e) {
+    logger.error('[api] searchArtistsPrefixSAI failed', { err: e?.message || e });
+    return res.status(500).json({ error: 'internal error' });
+  }
+}
+
+module.exports = { searchArtists, searchArtistsPrefixSAI };

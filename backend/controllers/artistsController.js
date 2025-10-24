@@ -34,6 +34,13 @@ function parseJson(text, fallback) {
   }
 }
 
+const Q_ORDERED_RANGE = ks => `
+  SELECT artist_id, name, name_lc, images
+  FROM ${ks}.artists
+  WHERE name_lc >= ? AND name_lc < ?
+  LIMIT ?
+`;
+
 const Q_ARTIST = (ks) => `
   SELECT artist_id, name, genres, followers, popularity, images, updated_at
   FROM ${ks}.artists
@@ -51,7 +58,40 @@ const Q_LIST_ARTISTS = (ks) => `
   FROM ${ks}.artists
 `;
 
-// GET /artists?limit=50&page_state=...
+async function listArtistsAZ(req, res) {
+  const client = getClient();
+  const ks = KEYSPACE();
+
+  const limit = Math.min(parseInt(req.query.limit || '50', 10), 200);
+  const after = (req.query.after || '').toLowerCase();           // last name from previous page
+  const start = after ? `${after}\u0000` : '';                   // move past the last item
+  const end = '\uffff';
+
+  try {
+    const rs = await client.execute(Q_ORDERED_RANGE(ks), [start, end, limit], { prepare: true });
+    const items = rs.rows
+      .sort((a, b) => (a.name_lc || '').localeCompare(b.name_lc || '')) // defensive (C* returns may not be strictly ordered)
+      .map(r => ({
+        artist_id: r.artist_id,
+        name: r.name,
+        image_url: pickThumb(r.images, 160),
+        name_lc: r.name_lc
+      }));
+
+    const next_after = items.length ? items[items.length - 1].name_lc : null;
+
+    return res.json({
+      items,
+      limit,
+      next_after,       // use this as ?after= for next page
+      has_more: items.length === limit
+    });
+  } catch (e) {
+    logger.error('[api] listArtistsAZ failed', { err: e?.message || e });
+    return res.status(500).json({ error: 'internal error' });
+  }
+}
+
 async function listArtists(req, res) {
   const client = getClient();
   const ks = KEYSPACE();
@@ -144,4 +184,4 @@ async function getArtistAlbums(req, res) {
   }
 }
 
-module.exports = { getArtist, getArtistAlbums, listArtists };
+module.exports = { getArtist, getArtistAlbums, listArtists, listArtistsAZ };

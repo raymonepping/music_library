@@ -5,6 +5,8 @@ const router = express.Router();
 const ensureToken = require("../middleware/ensureToken");
 
 // Controllers
+const { stats } = require('../controllers/statsController');
+
 const {
   login,
   callback,
@@ -28,6 +30,7 @@ const {
 } = require("../controllers/dataStaxController");
 
 const { searchArtists } = require("../controllers/searchController");
+const { searchArtistsPrefixSAI } = require('../controllers/searchController');
 
 const {
   getArtist,
@@ -465,6 +468,7 @@ router.get("/albums/:id", getAlbum);
  *         description: Server error
  */
 router.get("/search/artists", searchArtists);
+router.get("/search/artists/prefix-sai", searchArtistsPrefixSAI);
 
 // list (browse all)
 router.get("/artists", listArtists);
@@ -497,5 +501,7 @@ router.get("/artists", listArtists);
 router.get("/vectors/artists/:id/similar", similarArtists);
 
 router.get("/auth/tokens", tokens);
+
+router.get('/api/stats', stats);
 
 module.exports = router;

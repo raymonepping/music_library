@@ -1,4 +1,5 @@
 // backend/controllers/albumsController.js
+const assert = require("node:assert");
 const { getClient, KEYSPACE } = require("../services/cassandra");
 const logger = require("../configurations/logger");
 
@@ -42,26 +43,44 @@ const Q_LIST_ALBUMS = (ks) => `
   FROM ${ks}.albums
 `;
 
-// GET /albums?limit=50&page_state=...
+// GET /albums?limit=50&page_state=...&sort=name&dir=asc|desc
 async function listAlbums(req, res) {
   const client = getClient();
   const ks = KEYSPACE();
 
-  const limit = Math.min(parseInt(req.query.limit || "50", 10), 200);
+  // paging + optional in-page sort
+  const limitRaw = Number.parseInt(req.query.limit ?? "50", 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
   const pageState = req.query.page_state || null;
+
+  const sort = (req.query.sort || "").toLowerCase(); // 'name' supported
+  const dir = (req.query.dir || "asc").toLowerCase(); // 'asc' | 'desc'
 
   try {
     const opts = { prepare: true, fetchSize: limit };
     if (pageState) opts.pageState = pageState;
 
+    // Full table scan with server paging (fine for your scale).
     const rs = await client.execute(Q_LIST_ALBUMS(ks), [], opts);
 
-    const items = rs.rows.map((r) => ({
+    // Map raw rows -> DTO
+    let items = rs.rows.map((r) => ({
       album_id: r.album_id,
       name: r.name,
       release_date: r.release_date,
       image_url: pickThumb(r.images, 160),
     }));
+
+    // Optional in-page alphabetical sort by name (only affects the current page)
+    if (sort === "name") {
+      items.sort((a, b) => {
+        const an = (a.name || "").toLowerCase();
+        const bn = (b.name || "").toLowerCase();
+        if (an < bn) return dir === "desc" ? 1 : -1;
+        if (an > bn) return dir === "desc" ? -1 : 1;
+        return 0;
+      });
+    }
 
     return res.json({
       items,
@@ -79,12 +98,12 @@ async function getAlbum(req, res) {
   const client = getClient();
   const ks = KEYSPACE();
   const { id } = req.params;
-
   try {
+    assert(id, "album id required");
     const rs = await client.execute(Q_ALBUM(ks), [id], { prepare: true });
-    if (rs.rowLength === 0)
+    if (rs.rowLength === 0) {
       return res.status(404).json({ error: "album not found" });
-
+    }
     const r = rs.first();
     return res.json({
       album_id: r.album_id,

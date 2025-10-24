@@ -91,6 +91,9 @@ export function useApi() {
       query: { limit }
     }),
 
+  // Stats
+  stats: () => $fetch(`${base}/stats`, { credentials: 'include' }),
+
   // ----- Search -----
   searchArtistsExact: (name: string) =>
     $fetch(`${backendBase}/search/artists`, { ...common, query: { name } }),
