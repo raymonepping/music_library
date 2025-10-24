@@ -95,10 +95,17 @@ export function useApi() {
   stats: () => $fetch(`${base}/stats`, { credentials: 'include' }),
 
   // ----- Search -----
-  searchArtistsExact: (name: string) =>
-    $fetch(`${backendBase}/search/artists`, { ...common, query: { name } }),
-  searchArtistsPrefix: (prefix: string, limit = 25) =>
-    $fetch(`${backendBase}/search/artists`, { ...common, query: { prefix, limit } }),
+searchArtistsExact: (q: string) =>
+  $fetch(`${backendBase}/search/artists/exact`, {
+    ...common,
+    query: { q: q.trim() }
+  }),
+
+searchArtistsPrefix: (q: string, limit = 25) =>
+  $fetch(`${backendBase}/search/artists/prefix-sai`, {
+    ...common,
+    query: { q: q.trim(), limit }
+  }),
 }
 
 }

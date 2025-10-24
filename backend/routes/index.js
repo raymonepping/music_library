@@ -467,8 +467,9 @@ router.get("/albums/:id", getAlbum);
  *       500:
  *         description: Server error
  */
-router.get("/search/artists", searchArtists);
-router.get("/search/artists/prefix-sai", searchArtistsPrefixSAI);
+router.get('/search/artists', require('../controllers/searchController').searchArtists);
+router.get('/search/artists/exact', require('../controllers/searchController').searchArtistsExact);
+router.get('/search/artists/prefix-sai', require('../controllers/searchController').searchArtistsPrefixSAI);
 
 // list (browse all)
 router.get("/artists", listArtists);
