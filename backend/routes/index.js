@@ -11,8 +11,8 @@ const {
   listColumns,
   startBuild,
   getStatus,
-  getTop
-} = require('../controllers/derivedArtistsController');
+  getTop,
+} = require("../controllers/derivedArtistsController");
 
 const {
   login,
@@ -522,15 +522,15 @@ router.get("/auth/tokens", tokens);
 router.get("/api/stats", stats);
 
 // Columns your UI can offer
-router.get('/iterate/columns', listColumns);
+router.get("/iterate/columns", listColumns);
 
 // Kick off a derived table build
-router.post('/iterate/build', express.json(), startBuild);
+router.post("/iterate/build", express.json(), startBuild);
 
 // Poll job status
-router.get('/iterate/status/:id', getStatus);
+router.get("/iterate/status/:id", getStatus);
 
 // Preview/top sample from derived table
-router.get('/iterate/top', getTop);
+router.get("/iterate/top", getTop);
 
 module.exports = router;

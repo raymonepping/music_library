@@ -6,7 +6,7 @@ function createJob(by) {
   const job = {
     id,
     by,
-    status: 'starting', // starting -> building -> done | error | canceled
+    status: "starting", // starting -> building -> done | error | canceled
     inserted: 0,
     total: 0,
     startedAt: new Date().toISOString(),
