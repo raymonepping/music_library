@@ -27,7 +27,7 @@ const job = ref<Job | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
 const topItems = ref<Array<{ artist_id: string; name: string; value: number|string; image_url?: string | null }>>([])
-const topLimit = ref<number>(5)
+const topLimit = ref<number>(6)
 const topVisible = ref(false) // for fade-in
 
 const selectedSort = computed(() => cols.value.find(c => c.key === selectedKey.value) || null)
