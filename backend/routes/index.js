@@ -8,6 +8,13 @@ const ensureToken = require("../middleware/ensureToken");
 const { stats } = require("../controllers/statsController");
 
 const {
+  listColumns,
+  startBuild,
+  getStatus,
+  getTop
+} = require('../controllers/derivedArtistsController');
+
+const {
   login,
   callback,
   logout,
@@ -513,5 +520,17 @@ router.get("/vectors/artists/:id/similar", similarArtists);
 router.get("/auth/tokens", tokens);
 
 router.get("/api/stats", stats);
+
+// Columns your UI can offer
+router.get('/iterate/columns', listColumns);
+
+// Kick off a derived table build
+router.post('/iterate/build', express.json(), startBuild);
+
+// Poll job status
+router.get('/iterate/status/:id', getStatus);
+
+// Preview/top sample from derived table
+router.get('/iterate/top', getTop);
 
 module.exports = router;

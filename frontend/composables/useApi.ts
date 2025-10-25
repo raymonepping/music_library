@@ -106,6 +106,31 @@ searchArtistsPrefix: (q: string, limit = 25) =>
     ...common,
     query: { q: q.trim(), limit }
   }),
+
+
+    // ----- Iterate / Alterations -----
+    iterateColumns: () =>
+      $fetch(`${backendBase}/iterate/columns`, { ...common }),
+
+    iterateBuild: (by: 'popularity' | 'followers' | 'name', buckets?: number, opts?: { rebuild?: boolean }) =>
+      $fetch(`${backendBase}/iterate/build`, {
+        ...common,
+        method: 'POST',
+        query: opts?.rebuild ? { mode: 'rebuild' } : undefined,
+        body: { by, ...(buckets ? { buckets } : {}) }
+      }),
+
+    iterateStatus: (jobId: string) =>
+      $fetch(`${backendBase}/iterate/status/${jobId}`, { ...common }),
+
+    iterateTop: (by: 'popularity' | 'followers' | 'name', limit = 5) =>
+      $fetch(`${backendBase}/iterate/top`, {
+        ...common,
+        query: { by, limit }
+      }),
+
+
+
 }
 
 }

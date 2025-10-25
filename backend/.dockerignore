@@ -1,5 +1,8 @@
 # Exclude backups folder
 node_modules/
+npm-debug.log
+Dockerfile*
+docker-compose*
 backups/
 tmp/
 

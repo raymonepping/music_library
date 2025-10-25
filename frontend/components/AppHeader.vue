@@ -124,6 +124,7 @@ const menuItems = [
   { name: 'Home', to: '/' },
   { name: 'Artists', to: '/artists' },
   { name: 'Albums', to: '/albums' },
+  { name: 'Alteration', to: '/alteration' },
   {
     name: 'Discover',
     children: [

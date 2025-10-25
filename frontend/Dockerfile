@@ -17,7 +17,7 @@ COPY . .
 RUN npm run build
 
 # Expose port
-EXPOSE 8095
+EXPOSE 8075
 
 # Start Nuxt in production
 CMD ["npm", "run", "dev"]

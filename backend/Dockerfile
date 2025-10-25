@@ -1,20 +1,28 @@
-# Base image
-FROM node:20.19.4
-
-# Set working directory
+# --- Dependencies layer (cached) ---
+FROM node:20-slim AS deps
 WORKDIR /app
 
-# Copy package.json and package-lock.json
+# Ensure reproducible installs; prefer npm ci if you have package-lock.json
 COPY package*.json ./
+# If you need dev deps at runtime, remove --omit=dev
+RUN npm ci --omit=dev
 
-# Install dependencies
-RUN npm install
+# --- Runtime image (lean) ---
+FROM node:20-slim AS runner
+WORKDIR /app
 
-# Copy the rest of the application code
+# Good defaults for prod
+ENV NODE_ENV=production \
+    TZ=UTC
+
+# Copy only what's needed at runtime
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Expose the port the backend listens on
+# You’re listening on 3002 in the app
 EXPOSE 3002
 
-# Run the application
+# Run as non-root (safer). If your app writes to the FS, ensure dirs are writable.
+USER node
+
 CMD ["npm", "start"]
