@@ -1,16 +1,44 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 
 type Album = { album_id: string; name: string; image_url?: string | null; artist_name?: string }
 const api = useApi()
 
 const limit = 18
+const STORAGE_KEY = 'albumsPager_v1'
+
 const pageIndex = ref(0)
 const tokens = ref<(string | null)[]>([null])
 const pages = ref<Album[][]>([])
 const hasMoreFlags = ref<boolean[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// restore
+if (process.client) {
+  const raw = sessionStorage.getItem(STORAGE_KEY)
+  if (raw) {
+    try {
+      const s = JSON.parse(raw)
+      if (Array.isArray(s.tokens) && s.tokens.length) tokens.value = s.tokens
+      if (Array.isArray(s.pages)) pages.value = s.pages
+      if (Array.isArray(s.hasMore)) hasMoreFlags.value = s.hasMore
+      if (typeof s.pageIndex === 'number') pageIndex.value = Math.max(0, s.pageIndex)
+    } catch {}
+  }
+}
+function persist() {
+  if (!process.client) return
+  sessionStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      tokens: tokens.value,
+      pages: pages.value,
+      hasMore: hasMoreFlags.value,
+      pageIndex: pageIndex.value,
+    }),
+  )
+}
 
 const currentItems = computed(() => pages.value[pageIndex.value] || [])
 const hasPrev = computed(() => pageIndex.value > 0)
@@ -19,6 +47,7 @@ const currentPage = computed(() => pageIndex.value + 1)
 const knownPages = computed(() => Math.max(tokens.value.length, pages.value.length))
 
 async function fetchPage(i: number) {
+  if (i < 0) return
   if (pages.value[i]) return
   loading.value = true
   error.value = null
@@ -30,6 +59,7 @@ async function fetchPage(i: number) {
     if (res.next_page_state && tokens.value.length === i + 1) {
       tokens.value.push(res.next_page_state)
     }
+    persist()
   } catch (e: any) {
     error.value = e?.message || 'Failed to load'
   } finally {
@@ -42,6 +72,7 @@ async function goTo(i: number) {
   if (i > tokens.value.length - 1) return
   await fetchPage(i)
   pageIndex.value = i
+  persist()
   if (process.client) window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
@@ -59,7 +90,26 @@ const pagesBar = computed<(number | string)[]>(() => {
   return out
 })
 
-onMounted(() => fetchPage(0))
+// initial load + warmup
+onMounted(async () => {
+  await fetchPage(pageIndex.value)
+  if (hasNext.value && tokens.value.length > pageIndex.value + 1) {
+    fetchPage(pageIndex.value + 1)
+  }
+})
+
+// prefetch next on page change
+watch(
+  () => currentPage.value,
+  (p) => {
+    const nextIndex = p
+    const canPrefetch = hasNext.value && !pages.value[nextIndex]
+    if (canPrefetch && tokens.value.length > nextIndex) {
+      fetchPage(nextIndex)
+    }
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>

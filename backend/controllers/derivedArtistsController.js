@@ -163,11 +163,9 @@ async function startBuild(req, res) {
     .toLowerCase();
   const cfg = SORTS[by];
   if (!cfg)
-    return res
-      .status(400)
-      .json({
-        error: `Unsupported 'by'. Use: ${Object.keys(SORTS).join(", ")}`,
-      });
+    return res.status(400).json({
+      error: `Unsupported 'by'. Use: ${Object.keys(SORTS).join(", ")}`,
+    });
 
   const buckets = Math.max(parseInt(req.body?.buckets || "10", 10), 1);
   const mode = String(req.query?.mode || "").toLowerCase();
@@ -323,11 +321,9 @@ async function getTop(req, res) {
     .toLowerCase();
   const cfg = SORTS[by];
   if (!cfg)
-    return res
-      .status(400)
-      .json({
-        error: `Unsupported 'by'. Use: ${Object.keys(SORTS).join(", ")}`,
-      });
+    return res.status(400).json({
+      error: `Unsupported 'by'. Use: ${Object.keys(SORTS).join(", ")}`,
+    });
 
   const limit = Math.min(parseInt(req.query.limit || "5", 10), 50);
   const table = `${ks}.artists_by_${by}`;

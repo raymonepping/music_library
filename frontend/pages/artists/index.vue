@@ -1,20 +1,49 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 
 type Artist = { artist_id: string; name: string; image_url?: string | null }
 const api = useApi() // auto-imported in Nuxt 3
 
+// config
+const limit = 18
+const STORAGE_KEY = 'artistsPager_v1'
+
 // state
-const items = ref<Artist[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 
 // classic pagination via page_state tokens
-const limit = 18
-const pageIndex = ref(0)                // 0-based
-const tokens = ref<(string | null)[]>([null]) // token per page, page 1 is null
-const pages = ref<Artist[][]>([])       // cache page data
-const hasMoreFlags = ref<boolean[]>([]) // whether page i had a next
+const pageIndex = ref(0)                       // 0-based
+const tokens = ref<(string | null)[]>([null])  // page 1 is null
+const pages = ref<Artist[][]>([])              // cache per page
+const hasMoreFlags = ref<boolean[]>([])        // whether page i has a next
+
+// restore from session storage (client only)
+if (process.client) {
+  const raw = sessionStorage.getItem(STORAGE_KEY)
+  if (raw) {
+    try {
+      const s = JSON.parse(raw)
+      if (Array.isArray(s.tokens) && s.tokens.length) tokens.value = s.tokens
+      if (Array.isArray(s.pages)) pages.value = s.pages
+      if (Array.isArray(s.hasMore)) hasMoreFlags.value = s.hasMore
+      if (typeof s.pageIndex === 'number') pageIndex.value = Math.max(0, s.pageIndex)
+    } catch {/* ignore */}
+  }
+}
+
+function persist() {
+  if (!process.client) return
+  sessionStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      tokens: tokens.value,
+      pages: pages.value,
+      hasMore: hasMoreFlags.value,
+      pageIndex: pageIndex.value,
+    }),
+  )
+}
 
 const currentItems = computed(() => pages.value[pageIndex.value] || [])
 const hasPrev = computed(() => pageIndex.value > 0)
@@ -23,18 +52,23 @@ const currentPage = computed(() => pageIndex.value + 1)
 const knownPages = computed(() => Math.max(tokens.value.length, pages.value.length))
 
 async function fetchPage(i: number) {
-  if (pages.value[i]) return
+  if (i < 0) return
+  if (pages.value[i]) return // already loaded
+
   loading.value = true
   error.value = null
   try {
     const token = tokens.value[i] ?? undefined
     const res = await api.artistsList({ limit, page_state: token })
-    // must be: { items, next_page_state, has_more }
+    // expected: { items, next_page_state, has_more }
     pages.value[i] = res.items || []
     hasMoreFlags.value[i] = !!res.next_page_state
+
+    // prepare token for next page if present
     if (res.next_page_state && tokens.value.length === i + 1) {
       tokens.value.push(res.next_page_state)
     }
+    persist()
   } catch (e: any) {
     error.value = e?.message || 'Failed to load'
   } finally {
@@ -44,13 +78,14 @@ async function fetchPage(i: number) {
 
 async function goTo(i: number) {
   if (i < 0) return
-  // cannot jump beyond known tokens
-  if (i > tokens.value.length - 1) return
+  if (i > tokens.value.length - 1) return // cannot jump beyond known tokens
   await fetchPage(i)
   pageIndex.value = i
+  persist()
   if (process.client) window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+// build a compact page bar for known pages
 const pagesBar = computed<(number | string)[]>(() => {
   const total = knownPages.value
   const cur = currentPage.value
@@ -68,7 +103,28 @@ const pagesBar = computed<(number | string)[]>(() => {
   return out
 })
 
-onMounted(() => fetchPage(0))
+// initial load + one-time warmup for page 2
+onMounted(async () => {
+  await fetchPage(pageIndex.value)
+  // warm up next page if available
+  if (hasNext.value && tokens.value.length > pageIndex.value + 1) {
+    fetchPage(pageIndex.value + 1)
+  }
+})
+
+// prefetch the next page whenever currentPage changes
+watch(
+  () => currentPage.value,
+  (p) => {
+    const nextIndex = p // because current is 1-based
+    const canPrefetch = hasNext.value && !pages.value[nextIndex]
+    // only prefetch if we already learned the next token
+    if (canPrefetch && tokens.value.length > nextIndex) {
+      fetchPage(nextIndex)
+    }
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
@@ -101,7 +157,7 @@ onMounted(() => fetchPage(0))
     </div>
 
     <div class="mt-6 flex items-center justify-center gap-2 flex-wrap">
-      <button class="px-3 py-1 border rounded disabled:opacity-50" :disabled="!hasPrev" @click="goTo(pageIndex - 1)">Prev</button>
+      <button class="px-3 py-1 border rounded disabled:opacity-50" :disabled="pageIndex === 0" @click="goTo(pageIndex - 1)">Prev</button>
       <template v-for="p in pagesBar" :key="`p-${p}`">
         <span v-if="p === '…'" class="px-2 select-none">…</span>
         <button

@@ -1,23 +1,23 @@
-// backend/app.js (NEW file)
 const path = require("path");
 const express = require("express");
 const session = require("express-session");
 const cookieParser = require("cookie-parser");
-
+const compression = require("compression"); // ← ADD
 const config = require("./configurations");
 const logger = require("./configurations/logger");
-
 const corsDev = require("./middleware/corsDev");
-
-// routes
 const routes = require("./routes");
-
-// swagger
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./configurations/swaggerOptions");
 
 const app = express();
 
+// ────────────────────────────────
+// Core middleware
+// ────────────────────────────────
+app.disable("x-powered-by");
+app.set("etag", "strong");          // enable ETag generation
+app.use(compression());             // gzip/deflate for faster responses
 app.use(cookieParser());
 app.use(corsDev);
 
@@ -33,13 +33,27 @@ app.use(
   }),
 );
 
-// static for custom Swagger CSS
+// ────────────────────────────────
+// Simple cache headers for hot endpoints
+// ────────────────────────────────
+function shortCache(req, res, next) {
+  // Cache 30s, allow stale for 60s while revalidating
+  res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
+  next();
+}
+
+// Apply to catalog endpoints only
+app.use("/artists", shortCache);
+app.use("/albums", shortCache);
+
+// ────────────────────────────────
+// Swagger
+// ────────────────────────────────
 app.use(
   "/swagger-custom.css",
   express.static(path.join(__dirname, "configurations", "swagger-custom.css")),
 );
 
-// Swagger UI
 app.use(
   "/api-docs",
   swaggerUi.serve,
@@ -49,6 +63,9 @@ app.use(
 );
 logger.info("Swagger UI available at /api-docs");
 
+// ────────────────────────────────
+// Main routes
+// ────────────────────────────────
 app.use(routes);
 
 module.exports = app;
