@@ -16,8 +16,8 @@ const app = express();
 // Core middleware
 // ────────────────────────────────
 app.disable("x-powered-by");
-app.set("etag", "strong");          // enable ETag generation
-app.use(compression());             // gzip/deflate for faster responses
+app.set("etag", "strong"); // enable ETag generation
+app.use(compression()); // gzip/deflate for faster responses
 app.use(cookieParser());
 app.use(corsDev);
 
