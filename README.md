@@ -116,8 +116,5 @@ See repository: IBM-HashiCorp-DataStax.
 ---
 
 ## 🧾 License
-MIT © Raymon Epping
 
-[GPLv3](LICENSE)
-
-https://github.com/raymonepping/music_library
+[GPLv3](LICENSE) © Raymon Epping
