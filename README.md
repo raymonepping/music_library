@@ -9,6 +9,8 @@ A full-stack data engine that syncs, analyzes, and serves your Spotify world —
 Most people build dashboards.  
 This project builds a **data engine** — a pipeline that connects to Spotify, stores and extends your music data in Astra DB, and exposes it securely through a modular API.
 
+---
+
 ### 🧩 Architecture
 - **Frontend:** Nuxt 3 + Tailwind (modern SPA)
 - **Backend:** Express.js + Swagger UI + Vault integration
@@ -66,20 +68,25 @@ Then open:
 
 ```bash
 http://localhost:3002/api-docs  → Swagger UI
+```
 
 2️⃣ Frontend
+```bash
 cd frontend
 npm install
 npm run dev
+```
 Runs at:
 - http://localhost:8075
 
-🔐 Security
+---
+
+### 🔐 Security
 Vault KV v2: stores Spotify and Astra credentials
 Vault Transit: signs JWTs for internal token exchange
 Session Auth: Spotify OAuth 2.0 (refresh token saved securely)
 
-💾 Database Schema
+### 💾 Database Schema
 Tables are automatically created in Astra via:
 
 backend/services/cassandra.js → ensureSchema()
@@ -88,7 +95,7 @@ users, playlists, tracks, playlist_tracks
 
 Derived tables via /iterate/build for popularity/followers/name indexes
 
-📊 Example API Endpoints
+### 📊 Example API Endpoints
 Endpoint	Description
 /auth/login	Start Spotify OAuth flow
 /api/sync/spotify	Import playlists and tracks
@@ -99,7 +106,6 @@ Endpoint	Description
 /api/stats	Global statistics
 
 Swagger UI documents them all.
-```
 
 ---
 
