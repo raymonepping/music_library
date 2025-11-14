@@ -129,3 +129,4 @@ docker-compose.override.yml
 crash.log
 justfile
 
+.env*
