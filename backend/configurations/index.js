@@ -123,9 +123,7 @@ async function loadDatastaxFromVault() {
     config.ASTRA_DB_ID = data.ASTRA_DB_ID || config.ASTRA_DB_ID;
     config.ASTRA_DB_REGION = data.ASTRA_DB_REGION || config.ASTRA_DB_REGION;
     config.ASTRA_DB_KEYSPACE =
-      data.ASTRA_DB_KEYSPACE ||
-      data.KEYSPACE_NAME ||
-      config.ASTRA_DB_KEYSPACE;
+      data.ASTRA_DB_KEYSPACE || data.KEYSPACE_NAME || config.ASTRA_DB_KEYSPACE;
     config.ASTRA_SCB_PATH = data.ASTRA_SCB_PATH || config.ASTRA_SCB_PATH;
     config.ASTRA_DB_ENDPOINT =
       data.ASTRA_DB_ENDPOINT || config.ASTRA_DB_ENDPOINT;

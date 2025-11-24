@@ -34,12 +34,10 @@ const logger = require("./configurations/logger");
       logger.info(`Backend listening on http://localhost:${config.PORT}`);
     });
   } catch (e) {
-
     // eslint-disable-next-line no-console
     console.error("RAW startup error:", e);
     const details = e && e.stack ? e.stack : e;
     logger.error(`Startup failure: ${details}`);
     process.exit(1);
   }
-
 })();

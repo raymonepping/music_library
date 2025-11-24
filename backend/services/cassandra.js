@@ -37,14 +37,11 @@ function getClient() {
     },
   });
 
-  logger.debug(
-    "[Cassandra] Client created with Vault backed config",
-    {
-      keyspace: config.ASTRA_DB_KEYSPACE,
-      scbPath: config.ASTRA_SCB_PATH,
-      endpoint: config.ASTRA_DB_ENDPOINT,
-    },
-  );
+  logger.debug("[Cassandra] Client created with Vault backed config", {
+    keyspace: config.ASTRA_DB_KEYSPACE,
+    scbPath: config.ASTRA_SCB_PATH,
+    endpoint: config.ASTRA_DB_ENDPOINT,
+  });
 
   return client;
 }

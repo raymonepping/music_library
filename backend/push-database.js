@@ -31,7 +31,9 @@ function getClient() {
   const APPLICATION_TOKEN = config.ASTRA_DB_TOKEN || config.APPLICATION_TOKEN;
 
   if (!SCB_PATH) {
-    throw new Error("[cassandra] Missing ASTRA_SCB_PATH (from Vault kv/datastax)");
+    throw new Error(
+      "[cassandra] Missing ASTRA_SCB_PATH (from Vault kv/datastax)",
+    );
   }
   if (!APPLICATION_TOKEN) {
     throw new Error(
