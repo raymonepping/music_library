@@ -21,7 +21,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034
-VERSION="0.8.1"
+VERSION="1.0.0"
 
 ENV_FILE="${ENV_FILE:-.env}"
 STRICT=false
