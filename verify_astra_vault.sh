@@ -20,7 +20,8 @@
 
 set -euo pipefail
 
-VERSION="0.8.0"
+# shellcheck disable=SC2034
+VERSION="0.8.1"
 
 ENV_FILE="${ENV_FILE:-.env}"
 STRICT=false
@@ -503,8 +504,53 @@ fi
 hr
 
 # ---------------------------
-# 6. Connectivity test via Astra REST (curl)
+# SCB path resolution (new)
 # ---------------------------
+
+# ---------------------------
+# SCB path resolution (new)
+# ---------------------------
+
+resolve_bundle_path() {
+  local raw="$1"
+
+  if [[ -z "$raw" ]]; then
+    echo ""
+    return
+  fi
+
+  # Absolute path → keep as-is
+  if [[ "$raw" = /* ]]; then
+    echo "$raw"
+    return
+  fi
+
+  # Base directory is where the script is run from (repo root in your case)
+  local base_dir="$PWD"
+
+  # Case 1: file exists as given (relative)
+  if [[ -f "$raw" ]]; then
+    echo "${base_dir}/${raw}"
+    return
+  fi
+
+  # Case 2: common case → running from repo root, bundle lives in backend/
+  if [[ -f "backend/$raw" ]]; then
+    echo "${base_dir}/backend/${raw}"
+    return
+  fi
+
+  # Fallback: still turn it into an absolute path so cqlsh does not depend on CWD
+  echo "${base_dir}/${raw}"
+}
+
+
+EFFECTIVE_ASTRA_SCB_PATH_RESOLVED="$(resolve_bundle_path "$EFFECTIVE_ASTRA_SCB_PATH")"
+
+if $SCRIPT_DEBUG; then
+  echo "🔍 [DEBUG] SCB raw:      ${EFFECTIVE_ASTRA_SCB_PATH:-"<empty>"}"
+  echo "🔍 [DEBUG] SCB resolved: ${EFFECTIVE_ASTRA_SCB_PATH_RESOLVED:-"<empty>"}"
+fi
 
 # ---------------------------
 # 6. Connectivity test via Astra REST (curl) – optional
@@ -580,22 +626,30 @@ hr
 # ---------------------------
 # 7. cqlsh secure-connect-bundle connectivity test (Astra)
 # ---------------------------
+CQLSH_TIMEOUT_SECONDS="${CQLSH_TIMEOUT_SECONDS:-20}"
+CQLSH_CONNECTIVITY_ICON="⚪"
+CQLSH_CONNECTIVITY_DETAIL="cqlsh test skipped."
+
+# ---------------------------
+# 7. cqlsh secure-connect-bundle connectivity test (Astra)
+# ---------------------------
 
 CQLSH_CONNECTIVITY_ICON="⚪"
 CQLSH_CONNECTIVITY_DETAIL="cqlsh test skipped."
 
 if $CQLSH_OK; then
-  if [[ -n "${EFFECTIVE_ASTRA_SCB_PATH:-}" && -f "$EFFECTIVE_ASTRA_SCB_PATH" ]]; then
+  if [[ -n "${EFFECTIVE_ASTRA_SCB_PATH_RESOLVED:-}" && -f "$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED" ]]; then
     log "💾 Running Astra CQL connectivity test via cqlsh bundle..."
 
     if $SCRIPT_DEBUG; then
-      echo "🔍 [DEBUG] Bundle path: $EFFECTIVE_ASTRA_SCB_PATH"
-      echo "🔍 [DEBUG] Running: cqlsh --secure-connect-bundle \"\$EFFECTIVE_ASTRA_SCB_PATH\" -u token -p ***** -e \"DESCRIBE KEYSPACES;\""
+      echo "🔍 [DEBUG] Bundle path (resolved): $EFFECTIVE_ASTRA_SCB_PATH_RESOLVED"
+      echo "🔍 [DEBUG] Running: cqlsh --secure-connect-bundle \"$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED\" -u token -p ***** -e \"DESCRIBE KEYSPACES;\""
     fi
 
+    # Run cqlsh in a subshell so set -e does not kill the script on non-zero exit
     CQLSH_OUTPUT="$(
       cqlsh \
-        --secure-connect-bundle "$EFFECTIVE_ASTRA_SCB_PATH" \
+        --secure-connect-bundle "$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED" \
         -u token \
         -p "$EFFECTIVE_ASTRA_DB_TOKEN" \
         -e "DESCRIBE KEYSPACES;" 2>&1
@@ -605,22 +659,27 @@ if $CQLSH_OK; then
     if [[ $CQLSH_RC -eq 0 ]]; then
       CQLSH_CONNECTIVITY_ICON="🟢"
       CQLSH_CONNECTIVITY_DETAIL="cqlsh connected successfully via secure connect bundle."
+      if $SCRIPT_DEBUG; then
+        echo "🔍 [DEBUG] cqlsh output:"
+        sed 's/^/   /' <<<"$CQLSH_OUTPUT"
+      fi
     else
       CQLSH_CONNECTIVITY_ICON="🔴"
-      CQLSH_CONNECTIVITY_DETAIL="cqlsh bundle connection failed."
+      CQLSH_CONNECTIVITY_DETAIL="cqlsh bundle connection failed (exit ${CQLSH_RC})."
       mark_red
       if $SCRIPT_DEBUG; then
-        echo "🔍 [DEBUG] cqlsh error:"
+        echo "🔍 [DEBUG] cqlsh error output:"
         sed 's/^/   /' <<<"$CQLSH_OUTPUT"
       fi
     fi
+
   else
-    if [[ -n "${EFFECTIVE_ASTRA_SCB_PATH:-}" && ! -f "$EFFECTIVE_ASTRA_SCB_PATH" ]]; then
+    if [[ -n "${EFFECTIVE_ASTRA_SCB_PATH_RESOLVED:-}" && ! -f "$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED" ]]; then
       CQLSH_CONNECTIVITY_ICON="🔴"
-      CQLSH_CONNECTIVITY_DETAIL="Secure connect bundle path set but file not found."
+      CQLSH_CONNECTIVITY_DETAIL="Secure connect bundle path set but file not found: $EFFECTIVE_ASTRA_SCB_PATH_RESOLVED"
       mark_red
-      if [[ "${DEBUG:-false}" == "true" ]]; then
-        echo "🔍 [DEBUG] Missing bundle file at: $EFFECTIVE_ASTRA_SCB_PATH"
+      if $SCRIPT_DEBUG; then
+        echo "🔍 [DEBUG] Missing bundle file at (resolved): $EFFECTIVE_ASTRA_SCB_PATH_RESOLVED"
       fi
     else
       CQLSH_CONNECTIVITY_ICON="🟠"
@@ -665,7 +724,7 @@ case "$CONNECTIVITY_ICON" in
 "✅") log "• Astra can be reached with the credentials from Vault = ✅" ;;
 "🔴") log "• Astra connectivity test failed = 🔴" ;;
 "🟠") log "• Astra connectivity test reported non-blocking REST warnings = 🟠" ;;
-*) log "• Astra connectivity test not executed = ⚪" ;;
+*)    log "• Astra connectivity test not executed = ⚪" ;;
 esac
 
 log ""
