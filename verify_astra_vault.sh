@@ -80,33 +80,17 @@ Optional:
 EOF
 }
 
+# shellcheck disable=SC2034
 PYTHON_VERSION_STR=""
+
+# shellcheck disable=SC2034
 PYTHON_MAJOR=0
+
+# shellcheck disable=SC2034
 PYTHON_MINOR=0
+
+# shellcheck disable=SC2034
 PYTHON_COMPAT="unknown"
-
-detect_python_version() {
-  PYTHON_VERSION_STR=$(python3 --version 2>/dev/null || true)
-  PYTHON_MAJOR=0
-  PYTHON_MINOR=0
-  PYTHON_COMPAT="missing"
-
-  if [[ -n "$PYTHON_VERSION_STR" ]]; then
-    if [[ "$PYTHON_VERSION_STR" =~ ([0-9]+)\.([0-9]+)\. ]]; then
-      PYTHON_MAJOR="${BASH_REMATCH[1]}"
-      PYTHON_MINOR="${BASH_REMATCH[2]}"
-      if ((PYTHON_MAJOR == 3 && PYTHON_MINOR >= 8 && PYTHON_MINOR <= 11)); then
-        PYTHON_COMPAT="ok"
-      elif ((PYTHON_MAJOR == 3 && PYTHON_MINOR >= 12)); then
-        PYTHON_COMPAT="too_new"
-      else
-        PYTHON_COMPAT="other"
-      fi
-    else
-      PYTHON_COMPAT="other"
-    fi
-  fi
-}
 
 # ---------------------------
 # pyenv + deps for cqlsh
@@ -660,7 +644,7 @@ if $CQLSH_OK; then
       CQLSH_CONNECTIVITY_DETAIL="cqlsh connected successfully via secure connect bundle."
       if $SCRIPT_DEBUG; then
         echo "🔍 [DEBUG] cqlsh output:"
-        sed 's/^/   /' <<<"$CQLSH_OUTPUT"
+        printf '   %s\n' "$CQLSH_OUTPUT"
       fi
     else
       CQLSH_CONNECTIVITY_ICON="🔴"
@@ -668,7 +652,7 @@ if $CQLSH_OK; then
       mark_red
       if $SCRIPT_DEBUG; then
         echo "🔍 [DEBUG] cqlsh error output:"
-        sed 's/^/   /' <<<"$CQLSH_OUTPUT"
+        printf '   %s\n' "$CQLSH_OUTPUT"
       fi
     fi
 
