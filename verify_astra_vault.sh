@@ -544,7 +544,6 @@ resolve_bundle_path() {
   echo "${base_dir}/${raw}"
 }
 
-
 EFFECTIVE_ASTRA_SCB_PATH_RESOLVED="$(resolve_bundle_path "$EFFECTIVE_ASTRA_SCB_PATH")"
 
 if $SCRIPT_DEBUG; then
@@ -724,7 +723,7 @@ case "$CONNECTIVITY_ICON" in
 "✅") log "• Astra can be reached with the credentials from Vault = ✅" ;;
 "🔴") log "• Astra connectivity test failed = 🔴" ;;
 "🟠") log "• Astra connectivity test reported non-blocking REST warnings = 🟠" ;;
-*)    log "• Astra connectivity test not executed = ⚪" ;;
+*) log "• Astra connectivity test not executed = ⚪" ;;
 esac
 
 log ""
