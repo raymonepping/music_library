@@ -17,9 +17,9 @@ function getClient() {
       "[cassandra] Missing ASTRA_SCB_PATH in config (path to Secure Connect Bundle)",
     );
   }
-  if (!config.APPLICATION_TOKEN) {
+  if (!config.ASTRA_DB_TOKEN) {
     throw new Error(
-      "[cassandra] Missing APPLICATION_TOKEN in config (AstraCS:...)",
+      "[cassandra] Missing ASTRA_DB_TOKEN in config (AstraCS:...)",
     );
   }
 
@@ -27,10 +27,8 @@ function getClient() {
     cloud: { secureConnectBundle: path.resolve(config.ASTRA_SCB_PATH) },
     authProvider: new cassandra.auth.PlainTextAuthProvider(
       "token",
-      config.APPLICATION_TOKEN,
+      config.ASTRA_DB_TOKEN,
     ),
-    // Optional: uncomment if you want to set default keyspace
-    // keyspace: config.ASTRA_DB_KEYSPACE,
     pooling: {
       coreConnectionsPerHost: {
         [cassandra.types.distance.local]: 1,
@@ -40,7 +38,12 @@ function getClient() {
   });
 
   logger.debug(
-    `[Cassandra] Client created for keyspace=${config.ASTRA_DB_KEYSPACE}`,
+    "[Cassandra] Client created with Vault backed config",
+    {
+      keyspace: config.ASTRA_DB_KEYSPACE,
+      scbPath: config.ASTRA_SCB_PATH,
+      endpoint: config.ASTRA_DB_ENDPOINT,
+    },
   );
 
   return client;
@@ -64,7 +67,6 @@ async function ensureSchema() {
       images       text,
       updated_at   timestamp
     )`,
-
     `
     CREATE TABLE IF NOT EXISTS ${ks}.playlists (
       playlist_id  text PRIMARY KEY,
@@ -77,7 +79,6 @@ async function ensureSchema() {
       images       text,
       updated_at   timestamp
     )`,
-
     `
     CREATE TABLE IF NOT EXISTS ${ks}.tracks (
       track_id     text PRIMARY KEY,
@@ -91,7 +92,6 @@ async function ensureSchema() {
       artists      text,
       updated_at   timestamp
     )`,
-
     `
     CREATE TABLE IF NOT EXISTS ${ks}.playlist_tracks (
       playlist_id  text,

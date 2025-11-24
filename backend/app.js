@@ -1,12 +1,17 @@
 const path = require("path");
+
 const express = require("express");
 const session = require("express-session");
 const cookieParser = require("cookie-parser");
 const compression = require("compression"); // ← ADD
+
 const config = require("./configurations");
 const logger = require("./configurations/logger");
+
 const corsDev = require("./middleware/corsDev");
+
 const routes = require("./routes");
+
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./configurations/swaggerOptions");
 

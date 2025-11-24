@@ -4,6 +4,8 @@ services:
     hostname: backend
     env_file:
       - ./backend/.env
+    environment:
+      VAULT_ADDR: http://host.docker.internal:18200      
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -25,23 +27,15 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    depends_on:
-      backend:
-        condition: service_healthy
     environment:
-      # talk to backend via service name on the bridge network
-      NUXT_PUBLIC_BACKEND_BASE: http://backend:3002
-      NUXT_PUBLIC_API_BASE: http://backend:3002/api
+      NUXT_PUBLIC_BACKEND_BASE: http://localhost:3002
+      NUXT_PUBLIC_API_BASE: http://localhost:3002/api
       HOST: 0.0.0.0
       NITRO_PORT: 8075
       PORT: 8075
+      NUXT_PORT: 8075
     ports:
       - "8075:8075"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8075/"]
-      interval: 10s
-      timeout: 3s
-      retries: 20
     networks:
       music_library:
         aliases: [music_library_frontend]

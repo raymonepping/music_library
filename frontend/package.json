@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "nuxt build",
-    "dev": "cross-env PORT=8075 NUXT_PORT=8075 NITRO_PORT=8075 HOST=localhost NUXT_HOST=localhost NITRO_HOST=localhost nuxt dev --strict-port",
+    "dev": "nuxt dev --strict-port",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"

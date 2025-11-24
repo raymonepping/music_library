@@ -1,41 +1,44 @@
+// push-database.js
 require("dotenv").config();
 
 const cassandra = require("cassandra-driver");
 const path = require("path");
 const SpotifyWebApi = require("spotify-web-api-node");
 const logger = require("./configurations/logger");
-
-// ====== ENV ======
-const KEYSPACE =
-  process.env.ASTRA_DB_KEYSPACE || process.env.KEYSPACE_NAME || "planetary";
-const SCB_PATH = process.env.ASTRA_SCB_PATH;
-const APPLICATION_TOKEN =
-  process.env.APPLICATION_TOKEN || process.env.ASTRA_DB_APPLICATION_TOKEN;
-
-const SPOTIFY_CLIENT_ID = process.env.CLIENT_ID;
-const SPOTIFY_CLIENT_SECRET = process.env.CLIENT_SECRET;
-
-// Optional: user refresh token -> enables personal playlists + followed artists
-const SPOTIFY_REFRESH_TOKEN =
-  process.env.SPOTIFY_REFRESH_TOKEN || process.env.REFRESH_TOKEN || null;
+const config = require("./configurations");
 
 // Prefix fanout settings for artists_by_prefix
 const PREFIX_MIN = parseInt(process.env.PREFIX_MIN || "2", 10);
 const PREFIX_MAX = parseInt(process.env.PREFIX_MAX || "3", 10);
 
-if (!SCB_PATH) throw new Error("[cassandra] Missing ASTRA_SCB_PATH");
-if (!APPLICATION_TOKEN)
-  throw new Error(
-    "[cassandra] Missing APPLICATION_TOKEN / ASTRA_DB_APPLICATION_TOKEN",
+// Helper to derive keyspace from Vault-backed config (with safe fallback)
+function currentKeyspace() {
+  return (
+    config.ASTRA_DB_KEYSPACE ||
+    process.env.ASTRA_DB_KEYSPACE ||
+    process.env.KEYSPACE_NAME ||
+    "planetary"
   );
-if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
-  throw new Error("[spotify] Missing CLIENT_ID/CLIENT_SECRET in .env");
 }
 
 // ====== Cassandra Client ======
 let client = null;
+
 function getClient() {
   if (client) return client;
+
+  const SCB_PATH = config.ASTRA_SCB_PATH;
+  const APPLICATION_TOKEN = config.ASTRA_DB_TOKEN || config.APPLICATION_TOKEN;
+
+  if (!SCB_PATH) {
+    throw new Error("[cassandra] Missing ASTRA_SCB_PATH (from Vault kv/datastax)");
+  }
+  if (!APPLICATION_TOKEN) {
+    throw new Error(
+      "[cassandra] Missing ASTRA_DB_TOKEN / APPLICATION_TOKEN (from Vault kv/datastax)",
+    );
+  }
+
   client = new cassandra.Client({
     cloud: { secureConnectBundle: path.resolve(SCB_PATH) },
     authProvider: new cassandra.auth.PlainTextAuthProvider(
@@ -49,12 +52,19 @@ function getClient() {
       },
     },
   });
+
+  logger.debug("[astra] Cassandra client created", {
+    keyspace: currentKeyspace(),
+    scbPath: SCB_PATH,
+  });
+
   return client;
 }
 
 // ====== Schema ======
 async function ensureSchema() {
   const c = getClient();
+  const KEYSPACE = currentKeyspace();
 
   const stmts = [
     `
@@ -195,7 +205,6 @@ async function withRetry(label, fn, maxRetries = 4) {
 }
 
 // ====== Hugging Face Embeddings ======
-const HF_API_KEY = process.env.HUGGING_FACE_API_KEY;
 const HF_MODEL = "BAAI/bge-small-en-v1.5"; // 384 dims
 
 function buildArtistSentence(a) {
@@ -213,7 +222,15 @@ function buildArtistSentence(a) {
 
 async function embedBatch(texts) {
   const doFetch = globalThis.fetch || require("node-fetch");
-  if (!HF_API_KEY) throw new Error("[hf] Missing HUGGING_FACE_API_KEY");
+
+  const HF_API_KEY =
+    config.HUGGING_FACE_API_KEY || process.env.HUGGING_FACE_API_KEY;
+
+  if (!HF_API_KEY) {
+    throw new Error(
+      "[hf] Missing HUGGING_FACE_API_KEY (Vault kv/music or env)",
+    );
+  }
 
   const resp = await doFetch(
     `https://api-inference.huggingface.co/models/${HF_MODEL}`,
@@ -240,12 +257,41 @@ async function embedBatch(texts) {
   return Array.isArray(data[0]) ? data : [data];
 }
 
-// ====== Spotify: App client (client credentials) ======
-const appSpotify = new SpotifyWebApi({
-  clientId: SPOTIFY_CLIENT_ID,
-  clientSecret: SPOTIFY_CLIENT_SECRET,
-});
+// ====== Spotify clients (lazy init using Vault-backed config) ======
+let appSpotify = null;
+let userSpotify = null;
+let SPOTIFY_REFRESH_TOKEN = null;
 
+function initSpotifyClients() {
+  const SPOTIFY_CLIENT_ID = config.CLIENT_ID;
+  const SPOTIFY_CLIENT_SECRET = config.CLIENT_SECRET;
+
+  SPOTIFY_REFRESH_TOKEN =
+    config.SPOTIFY_REFRESH_TOKEN || process.env.REFRESH_TOKEN || null;
+
+  if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
+    throw new Error(
+      "[spotify] Missing CLIENT_ID/CLIENT_SECRET (from Vault kv/music or env)",
+    );
+  }
+
+  appSpotify = new SpotifyWebApi({
+    clientId: SPOTIFY_CLIENT_ID,
+    clientSecret: SPOTIFY_CLIENT_SECRET,
+  });
+
+  userSpotify = new SpotifyWebApi({
+    clientId: SPOTIFY_CLIENT_ID,
+    clientSecret: SPOTIFY_CLIENT_SECRET,
+    refreshToken: SPOTIFY_REFRESH_TOKEN || undefined,
+  });
+
+  logger.debug("[spotify] clients initialised from Vault-backed config", {
+    hasRefreshToken: Boolean(SPOTIFY_REFRESH_TOKEN),
+  });
+}
+
+// ====== Spotify: App token (client credentials) ======
 async function ensureAppToken() {
   const { body } = await withRetry("clientCredentialsGrant", () =>
     appSpotify.clientCredentialsGrant(),
@@ -254,13 +300,7 @@ async function ensureAppToken() {
   logger.info(`[spotify] app token acquired (expires_in=${body.expires_in}s)`);
 }
 
-// ====== Spotify: User client (refresh token) ======
-const userSpotify = new SpotifyWebApi({
-  clientId: SPOTIFY_CLIENT_ID,
-  clientSecret: SPOTIFY_CLIENT_SECRET,
-  refreshToken: SPOTIFY_REFRESH_TOKEN || undefined,
-});
-
+// ====== Spotify: User token (refresh token) ======
 async function ensureUserTokenIfPossible() {
   if (!SPOTIFY_REFRESH_TOKEN) return false;
   try {
@@ -279,6 +319,8 @@ async function ensureUserTokenIfPossible() {
 // ====== Collect IDs from Astra tracks ======
 async function collectIdsFromAstraTracks() {
   const c = getClient();
+  const KEYSPACE = currentKeyspace();
+
   const rs = await c.execute(
     `SELECT track_id, album_id, album_name, artists FROM ${KEYSPACE}.tracks`,
   );
@@ -452,6 +494,7 @@ function* namePrefixes(nameLc) {
 
 async function upsertArtistPrefixes(c, artistId, name, nameLc) {
   if (!nameLc) return;
+  const KEYSPACE = currentKeyspace();
   for (const p of namePrefixes(nameLc)) {
     await c.execute(
       `
@@ -467,6 +510,7 @@ async function upsertArtistPrefixes(c, artistId, name, nameLc) {
 // ====== Upsert functions ======
 async function upsertArtists(artists) {
   const c = getClient();
+  const KEYSPACE = currentKeyspace();
 
   const insertArtist = `
     INSERT INTO ${KEYSPACE}.artists
@@ -517,6 +561,7 @@ async function upsertArtists(artists) {
 
 async function upsertAlbumsAndMappings(albums) {
   const c = getClient();
+  const KEYSPACE = currentKeyspace();
 
   const albumQuery = `
     INSERT INTO ${KEYSPACE}.albums
@@ -565,6 +610,23 @@ async function upsertAlbumsAndMappings(albums) {
 
 // ====== Main run ======
 async function run() {
+  // Ensure Vault-backed config is loaded before using it
+  if (config.ready && typeof config.ready.then === "function") {
+    await config.ready;
+  }
+
+  logger.info("[startup] using Vault-backed configuration", {
+    keyspace: currentKeyspace(),
+    hasAstraToken: Boolean(config.ASTRA_DB_TOKEN || config.APPLICATION_TOKEN),
+    hasSpotifyClientId: Boolean(config.CLIENT_ID),
+    hasSpotifyClientSecret: Boolean(config.CLIENT_SECRET),
+    hasSpotifyRefreshToken: Boolean(config.SPOTIFY_REFRESH_TOKEN),
+    hasHfKey: Boolean(config.HUGGING_FACE_API_KEY),
+  });
+
+  // Now we can safely create Spotify clients with Vault-loaded secrets
+  initSpotifyClients();
+
   const c = getClient();
   try {
     await c.connect();
@@ -579,7 +641,7 @@ async function run() {
       logger.info("[spotify:user] enabled (followed artists + playlists)");
     } else {
       logger.info(
-        "[spotify:user] not configured (set SPOTIFY_REFRESH_TOKEN to enable)",
+        "[spotify:user] not configured (set SPOTIFY_REFRESH_TOKEN in Vault kv/music to enable)",
       );
     }
 

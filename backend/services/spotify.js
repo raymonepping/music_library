@@ -1,4 +1,4 @@
-// backend/services/spotify.js (NEW file)
+// backend/services/spotify.js
 const SpotifyWebApi = require("spotify-web-api-node");
 const config = require("../configurations");
 const logger = require("../configurations/logger");
@@ -20,52 +20,44 @@ const SCOPES = [
   "user-library-modify",
 ];
 
-// Minimal Vault KV v2 reader using global fetch
-async function readKvV2({ addr, token, mount, path }) {
-  const url = `${addr}/v1/${mount}/data/${encodeURIComponent(path)}`;
-  const res = await fetch(url, { headers: { "X-Vault-Token": token } });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Vault read failed ${res.status}: ${text}`);
-  }
-  const json = await res.json();
-  return json && json.data && json.data.data ? json.data.data : {};
-}
-
 async function loadSpotifySecrets() {
-  if (SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_SECRET) return;
-
-  if (!config.VAULT_ADDR || !config.VAULT_TOKEN) {
-    throw new Error(
-      "Missing CLIENT_ID/CLIENT_SECRET and VAULT_ADDR/VAULT_TOKEN. Set env or provide Vault token with read on kv/music.",
-    );
+  // Make sure Vault-backed config has been initialised
+  if (config.ready && typeof config.ready.then === "function") {
+    await config.ready;
   }
 
-  const data = await readKvV2({
-    addr: config.VAULT_ADDR,
-    token: config.VAULT_TOKEN,
-    mount: config.VAULT_KV_MOUNT,
-    path: config.VAULT_SPOTIFY_PATH,
-  });
-
-  SPOTIFY_CLIENT_ID = data.CLIENT_ID || data.client_id || "";
-  SPOTIFY_CLIENT_SECRET = data.CLIENT_SECRET || data.client_secret || "";
+  SPOTIFY_CLIENT_ID = config.CLIENT_ID;
+  SPOTIFY_CLIENT_SECRET = config.CLIENT_SECRET;
 
   if (!SPOTIFY_CLIENT_ID || !SPOTIFY_CLIENT_SECRET) {
     throw new Error(
-      "Spotify creds not found at kv/music (CLIENT_ID, CLIENT_SECRET).",
+      "Spotify CLIENT_ID / CLIENT_SECRET are not set. Check Vault kv/music or env.",
     );
   }
+
+  logger.debug("[Spotify] Loaded client config from Vault-backed settings", {
+    CLIENT_ID: `${SPOTIFY_CLIENT_ID.substring(0, 8)}...`,
+    hasClientSecret: Boolean(SPOTIFY_CLIENT_SECRET),
+    SPOTIFY_REDIRECT_URI: config.SPOTIFY_REDIRECT_URI,
+    hasRefreshToken: Boolean(config.SPOTIFY_REFRESH_TOKEN),
+  });
 }
 
-function makeSpotify({ accessToken, refreshToken }) {
+function makeSpotify({ accessToken, refreshToken } = {}) {
   const api = new SpotifyWebApi({
     clientId: SPOTIFY_CLIENT_ID,
     clientSecret: SPOTIFY_CLIENT_SECRET,
     redirectUri: config.SPOTIFY_REDIRECT_URI,
   });
+
   if (accessToken) api.setAccessToken(accessToken);
-  if (refreshToken) api.setRefreshToken(refreshToken);
+
+  const effectiveRefreshToken =
+    refreshToken || config.SPOTIFY_REFRESH_TOKEN || null;
+  if (effectiveRefreshToken) {
+    api.setRefreshToken(effectiveRefreshToken);
+  }
+
   return api;
 }
 
