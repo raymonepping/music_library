@@ -601,10 +601,11 @@ if $RUN_REST; then
     CONNECTIVITY_DETAIL="Missing endpoint or token; Astra REST connectivity not tested."
     mark_orange
   fi
-fi
 
-status_line "$CONNECTIVITY_ICON" "REST connectivity" "$CONNECTIVITY_DETAIL"
-hr
+  # Only print this section when REST was requested
+  status_line "$CONNECTIVITY_ICON" "REST connectivity" "$CONNECTIVITY_DETAIL"
+  hr
+fi
 
 # ---------------------------
 # 7. cqlsh secure-connect-bundle connectivity test (Astra)
@@ -703,12 +704,14 @@ else
   log "• Astra DB credentials not retrievable from Vault = 🔴"
 fi
 
-case "$CONNECTIVITY_ICON" in
-"✅") log "• Astra can be reached with the credentials from Vault = ✅" ;;
-"🔴") log "• Astra connectivity test failed = 🔴" ;;
-"🟠") log "• Astra connectivity test reported non-blocking REST warnings = 🟠" ;;
-*) log "• Astra connectivity test not executed = ⚪" ;;
-esac
+if $RUN_REST; then
+  case "$CONNECTIVITY_ICON" in
+  "✅") log "• Astra can be reached with the credentials from Vault = ✅" ;;
+  "🔴") log "• Astra connectivity test failed = 🔴" ;;
+  "🟠") log "• Astra connectivity test reported non-blocking REST warnings = 🟠" ;;
+  *) log "• Astra connectivity test not executed = ⚪" ;;
+  esac
+fi
 
 log ""
 if $ANY_RED; then
