@@ -1,0 +1,51 @@
+services:
+  backend:
+    container_name: backend_service
+    hostname: backend
+    env_file:
+      - ./backend/.env
+    environment:
+      VAULT_ADDR: http://host.containers.internal:18200
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    networks:
+      music_library:
+        aliases:
+          - backend
+    ports:
+      - '3002:3002'
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - '-fsS'
+        - http://localhost:3002/health
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  frontend:
+    container_name: frontend_service
+    hostname: frontend_service
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NUXT_PUBLIC_BACKEND_BASE: http://localhost:3002
+      NUXT_PUBLIC_API_BASE: http://localhost:3002/api
+      HOST: 0.0.0.0
+      NITRO_PORT: 8075
+      PORT: 8075
+      NUXT_PORT: 8075
+    ports:
+      - '8075:8075'
+    networks:
+      music_library:
+        aliases:
+          - music_library_frontend
+    restart: unless-stopped
+networks:
+  music_library:
+    name: music_library
+    driver: bridge

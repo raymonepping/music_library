@@ -1,0 +1,104 @@
+{
+  "inputs": {
+    "repoRoot": "/Users/raymon.epping/Documents/VSC/MacOS_Environment/music_library",
+    "composePath": "/Users/raymon.epping/Documents/VSC/MacOS_Environment/music_library/docker-compose.yml"
+  },
+  "summary": {
+    "serviceCount": 2,
+    "services": [
+      {
+        "name": "backend",
+        "hasBuild": true,
+        "hasImage": false,
+        "image": null,
+        "buildContext": "/Users/raymon.epping/Documents/VSC/MacOS_Environment/music_library/backend",
+        "resolvedDockerfile": "/Users/raymon.epping/Documents/VSC/MacOS_Environment/music_library/backend/Dockerfile",
+        "ports": [
+          "3002:3002"
+        ],
+        "volumes": [],
+        "env_file": [
+          "./backend/.env"
+        ],
+        "environment": {
+          "VAULT_ADDR": "http://host.docker.internal:18200"
+        },
+        "depends_on": null,
+        "healthcheck": {
+          "test": [
+            "CMD",
+            "curl",
+            "-fsS",
+            "http://localhost:3002/health"
+          ],
+          "interval": "10s",
+          "timeout": "3s",
+          "retries": 20
+        },
+        "restart": "unless-stopped",
+        "networks": {
+          "music_library": {
+            "aliases": [
+              "backend"
+            ]
+          }
+        },
+        "extra_hosts": [],
+        "privileged": false,
+        "network_mode": null,
+        "pid": null,
+        "ipc": null,
+        "cap_add": [],
+        "cap_drop": [],
+        "security_opt": [],
+        "devices": []
+      },
+      {
+        "name": "frontend",
+        "hasBuild": true,
+        "hasImage": false,
+        "image": null,
+        "buildContext": "/Users/raymon.epping/Documents/VSC/MacOS_Environment/music_library/frontend",
+        "resolvedDockerfile": "/Users/raymon.epping/Documents/VSC/MacOS_Environment/music_library/frontend/Dockerfile",
+        "ports": [
+          "8075:8075"
+        ],
+        "volumes": [],
+        "env_file": [],
+        "environment": {
+          "NUXT_PUBLIC_BACKEND_BASE": "http://localhost:3002",
+          "NUXT_PUBLIC_API_BASE": "http://localhost:3002/api",
+          "HOST": "0.0.0.0",
+          "NITRO_PORT": 8075,
+          "PORT": 8075,
+          "NUXT_PORT": 8075
+        },
+        "depends_on": null,
+        "healthcheck": null,
+        "restart": "unless-stopped",
+        "networks": {
+          "music_library": {
+            "aliases": [
+              "music_library_frontend"
+            ]
+          }
+        },
+        "extra_hosts": [],
+        "privileged": false,
+        "network_mode": null,
+        "pid": null,
+        "ipc": null,
+        "cap_add": [],
+        "cap_drop": [],
+        "security_opt": [],
+        "devices": []
+      }
+    ]
+  },
+  "findings": [],
+  "recommendation": {
+    "verdict": "GREEN",
+    "strategy": "podman-compose",
+    "rationale": []
+  }
+}

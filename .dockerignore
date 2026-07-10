@@ -1,6 +1,8 @@
 # Logs
 *.log
 logs
+lib
+lib/**
 
 # Sensitive / env files
 .env*

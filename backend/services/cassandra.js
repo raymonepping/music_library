@@ -6,6 +6,22 @@ const logger = require("../configurations/logger");
 
 let client;
 
+function resolveAstraToken() {
+  const token =
+    process.env.ASTRA_DB_TOKEN ||
+    process.env.APPLICATION_TOKEN ||
+    config.ASTRA_DB_TOKEN ||
+    config.APPLICATION_TOKEN;
+
+  if (!token) {
+    throw new Error(
+      "[cassandra] Missing ASTRA_DB_TOKEN in config/env (AstraCS:...)",
+    );
+  }
+
+  return token;
+}
+
 /**
  * Returns a singleton Cassandra client using Astra DB SCB + token
  */
@@ -17,18 +33,12 @@ function getClient() {
       "[cassandra] Missing ASTRA_SCB_PATH in config (path to Secure Connect Bundle)",
     );
   }
-  if (!config.ASTRA_DB_TOKEN) {
-    throw new Error(
-      "[cassandra] Missing ASTRA_DB_TOKEN in config (AstraCS:...)",
-    );
-  }
+
+  const token = resolveAstraToken();
 
   client = new cassandra.Client({
     cloud: { secureConnectBundle: path.resolve(config.ASTRA_SCB_PATH) },
-    authProvider: new cassandra.auth.PlainTextAuthProvider(
-      "token",
-      config.ASTRA_DB_TOKEN,
-    ),
+    authProvider: new cassandra.auth.PlainTextAuthProvider("token", token),
     pooling: {
       coreConnectionsPerHost: {
         [cassandra.types.distance.local]: 1,
@@ -41,6 +51,7 @@ function getClient() {
     keyspace: config.ASTRA_DB_KEYSPACE,
     scbPath: config.ASTRA_SCB_PATH,
     endpoint: config.ASTRA_DB_ENDPOINT,
+    tokenLength: token.length,
   });
 
   return client;

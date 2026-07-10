@@ -9,6 +9,10 @@
 # 5) Astra connectivity via REST (curl)
 # 6) Optional: cqlsh presence (with pyenv + cqlsh-astra auto-install + deps)
 #
+# Changelog:
+#   1.0.1 - Add Transit AstraCS token shape check and make cqlsh failures non blocking
+#   1.0.0 - Initial Transit and cqlsh integration
+#
 # Usage:
 #   ./verify_astra_vault.sh
 #   ./verify_astra_vault.sh --strict
@@ -21,7 +25,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 ENV_FILE="${ENV_FILE:-.env}"
 STRICT=false
@@ -29,6 +33,7 @@ REQUIRE_CQLSH=false
 
 RUN_REST=false
 SCRIPT_DEBUG=false
+TRANSIT_CHECK=false
 
 CQLSH_CMD="${CQLSH_CMD:-cqlsh}"
 ASTRA_VAULT_KEY="${ASTRA_VAULT_KEY:-astra}"
@@ -64,13 +69,14 @@ Checks:
   - Optional cqlsh presence (with pyenv + cqlsh-astra auto-install + deps)
 
 Usage:
-  $0 [--strict] [--require-cqlsh] [--rest] [--debug]
+  $0 [--strict] [--require-cqlsh] [--rest] [--debug] [--transit]
 
 Options:
   --strict          Treat any 🔴 finding as exit 1 (hard fail)
   --require-cqlsh   Treat missing cqlsh as 🔴 (hard blocker)
   --rest            Include Astra REST connectivity test
   --debug           Enable verbose debug output (implies --rest)
+  --transit         Check Transit setup (+ backend /debug/astra)
   -h, --help        Show this help message
 
 Optional:
@@ -215,12 +221,12 @@ download_and_install_cqlsh_astra() {
 
   echo "▶ Downloading cqlsh-astra from:"
   echo "   ${CQLSH_ASTRA_URL}"
-  echo "   → ${tarball}"
+  echo "   -> ${tarball}"
   echo
 
   if ! curl -fL "${CQLSH_ASTRA_URL}" -o "${tarball}"; then
     echo "❌ Failed to download cqlsh-astra tarball from ${CQLSH_ASTRA_URL}"
-    echo "   Check network / URL and try again."
+    echo "   Check network or URL and try again."
     return 1
   fi
 
@@ -265,6 +271,10 @@ while [[ $# -gt 0 ]]; do
   --debug)
     SCRIPT_DEBUG=true
     RUN_REST=true
+    shift
+    ;;
+  --transit)
+    TRANSIT_CHECK=true
     shift
     ;;
   -h | --help)
@@ -315,6 +325,10 @@ ANY_ORANGE=false
 mark_red() { ANY_RED=true; }
 mark_orange() { ANY_ORANGE=true; }
 
+TRANSIT_TOKEN_OK=false
+TRANSIT_DECRYPT_OK=false
+DECRYPTED_ASTRA_DB_TOKEN=""
+
 if $REQUIRE_CQLSH && ! $CQLSH_OK; then
   mark_red
 fi
@@ -364,7 +378,7 @@ if $HAS_TOKEN; then
 fi
 
 if $HAS_ID || $HAS_REGION || $HAS_KEYSPACE || $HAS_ENDPOINT; then
-  status_line "🟠" "ASTRA_DB_* config" "Non-secret Astra config present in .env (teachable: move into Vault)."
+  status_line "🟠" "ASTRA_DB_* config" "Non secret Astra config present in .env (teachable: move into Vault)."
   mark_orange
 fi
 
@@ -407,6 +421,7 @@ VAULT_ASTRA_DB_REGION=""
 VAULT_ASTRA_DB_KEYSPACE=""
 VAULT_ASTRA_DB_TOKEN=""
 VAULT_ASTRA_DB_ENDPOINT=""
+VAULT_ASTRA_SCB_PATH=""
 
 VAULT_KV_OK=false
 VAULT_HAS_ASTRA_FIELDS=false
@@ -431,24 +446,23 @@ if $VAULT_ENV_OK; then
     fi
 
     if [[ -n "$VAULT_ASTRA_DB_ID" && -n "$VAULT_ASTRA_DB_REGION" &&
-      -n "$VAULT_ASTRA_DB_KEYSPACE" && -n "$VAULT_ASTRA_DB_TOKEN" &&
-      -n "$VAULT_ASTRA_DB_ENDPOINT" ]]; then
+      -n "$VAULT_ASTRA_DB_KEYSPACE" && -n "$VAULT_ASTRA_DB_ENDPOINT" ]]; then
       VAULT_HAS_ASTRA_FIELDS=true
-      status_line "🟢" "Vault KV fields" "All ASTRA_DB_* fields present in ${VAULT_KV_MOUNT}/${ASTRA_VAULT_KEY}."
+      status_line "🟢" "Vault KV fields" "Astra metadata fields present in ${VAULT_KV_MOUNT}/${ASTRA_VAULT_KEY}."
     else
       if $JQ_OK; then
         missing_fields=()
         [[ -z "$VAULT_ASTRA_DB_ID" ]] && missing_fields+=("ASTRA_DB_ID")
         [[ -z "$VAULT_ASTRA_DB_REGION" ]] && missing_fields+=("ASTRA_DB_REGION")
         [[ -z "$VAULT_ASTRA_DB_KEYSPACE" ]] && missing_fields+=("ASTRA_DB_KEYSPACE")
-        [[ -z "$VAULT_ASTRA_DB_TOKEN" ]] && missing_fields+=("ASTRA_DB_TOKEN")
         [[ -z "$VAULT_ASTRA_DB_ENDPOINT" ]] && missing_fields+=("ASTRA_DB_ENDPOINT")
         status_line "🟠" "Vault KV fields" "Missing or empty: ${missing_fields[*]}."
         mark_orange
       fi
     fi
+
   else
-    status_line "🔴" "Vault KV read" "Failed to read ${vault_url} (path/permissions/auth?)."
+    status_line "🔴" "Vault KV read" "Failed to read ${vault_url} (path or permissions or auth)."
     VAULT_KV_OK=false
     mark_red
   fi
@@ -456,6 +470,172 @@ else
   log "⚠️  Skipping Vault KV read (Vault env not OK)."
 fi
 hr
+
+# ---------------------------
+# Transit + backend debug/astra checks
+# ---------------------------
+
+BACKEND_BASE_URL="${BACKEND_BASE_URL:-http://localhost:3002}"
+VAULT_TRANSIT_KEY="${VAULT_TRANSIT_KEY:-astra-transit}"
+
+if $TRANSIT_CHECK; then
+  log "🧪 Checking backend /debug/astra endpoint (Transit-backed tokens)..."
+
+  DEBUG_ICON="⚪"
+  DEBUG_DETAIL="Backend /debug/astra not checked."
+  debug_url="${BACKEND_BASE_URL%/}/debug/astra"
+
+  if debug_json=$(curl -sS "$debug_url" 2>/dev/null); then
+    if $JQ_OK; then
+      ASTRA_DEBUG_HAS_APP=$(jq -r '.hasAppToken // false' <<<"$debug_json" 2>/dev/null || echo "false")
+      ASTRA_DEBUG_HAS_DB=$(jq -r '.hasDbToken // false' <<<"$debug_json" 2>/dev/null || echo "false")
+      ASTRA_DEBUG_APP_LEN=$(jq -r '.appLen // 0' <<<"$debug_json" 2>/dev/null || echo "0")
+      ASTRA_DEBUG_DB_LEN=$(jq -r '.dbLen // 0' <<<"$debug_json" 2>/dev/null || echo "0")
+      ASTRA_DEBUG_KV_PATH=$(jq -r '.kvPath // empty' <<<"$debug_json" 2>/dev/null || echo "")
+      ASTRA_DEBUG_TRANSIT_KEY=$(jq -r '.transitKey // empty' <<<"$debug_json" 2>/dev/null || echo "")
+
+      if [[ "$ASTRA_DEBUG_HAS_APP" == "true" && "$ASTRA_DEBUG_HAS_DB" == "true" ]] &&
+        (( ASTRA_DEBUG_APP_LEN > 0 )) && (( ASTRA_DEBUG_DB_LEN > 0 )); then
+        DEBUG_ICON="🟢"
+        DEBUG_DETAIL="Backend reports Transit tokens loaded (len app=${ASTRA_DEBUG_APP_LEN}, db=${ASTRA_DEBUG_DB_LEN})."
+        TRANSIT_TOKEN_OK=true
+      else
+        DEBUG_ICON="🟠"
+        DEBUG_DETAIL="Backend /debug/astra reachable, but tokens not fully loaded."
+        mark_orange
+      fi
+
+      if $SCRIPT_DEBUG; then
+        echo "🔍 [DEBUG] /debug/astra kvPath=${ASTRA_DEBUG_KV_PATH}, transitKey=${ASTRA_DEBUG_TRANSIT_KEY}"
+      fi
+    else
+      DEBUG_ICON="🟠"
+      DEBUG_DETAIL="jq missing; /debug/astra reachable but response not parsed."
+      mark_orange
+      if $SCRIPT_DEBUG; then
+        echo "🔍 [DEBUG] Raw /debug/astra body:"
+        sed 's/^/   /' <<<"$debug_json"
+      fi
+    fi
+  else
+    DEBUG_ICON="🔴"
+    DEBUG_DETAIL="Failed to call ${debug_url} (backend not running)."
+    mark_red
+  fi
+
+  status_line "$DEBUG_ICON" "backend /debug/astra" "$DEBUG_DETAIL"
+  hr
+
+  # Transit key check via Vault HTTP API
+  log "🔐 Checking Vault Transit key '${VAULT_TRANSIT_KEY}'..."
+
+  TRANSIT_ICON="⚪"
+  TRANSIT_DETAIL="Transit key not checked."
+
+  if $VAULT_ENV_OK; then
+    transit_url="${VAULT_ADDR%/}/v1/transit/keys/${VAULT_TRANSIT_KEY}"
+
+    if transit_json=$(curl -sS -H "X-Vault-Token: ${VAULT_TOKEN}" "$transit_url" 2>/dev/null); then
+      if $JQ_OK; then
+        TRANSIT_TYPE=$(jq -r '.data.type // "unknown"' <<<"$transit_json" 2>/dev/null || echo "unknown")
+        TRANSIT_LATEST=$(jq -r '.data.latest_version // 0' <<<"$transit_json" 2>/dev/null || echo "0")
+        TRANSIT_ICON="🟢"
+        TRANSIT_DETAIL="Transit key exists (type=${TRANSIT_TYPE}, latest_version=${TRANSIT_LATEST})."
+      else
+        TRANSIT_ICON="🟢"
+        TRANSIT_DETAIL="Transit key readable (jq missing for detailed parse)."
+      fi
+    else
+      TRANSIT_ICON="🔴"
+      TRANSIT_DETAIL="Transit key '${VAULT_TRANSIT_KEY}' not readable (path or permissions)."
+      mark_red
+    fi
+  else
+    TRANSIT_ICON="🟠"
+    TRANSIT_DETAIL="Skipping Transit key check (Vault env not OK)."
+    mark_orange
+  fi
+
+  status_line "$TRANSIT_ICON" "Transit key" "$TRANSIT_DETAIL"
+
+  # KV ciphertext and Transit decrypt in kv/astra
+  if $VAULT_ENV_OK && $JQ_OK; then
+    cipher_path="${VAULT_KV_MOUNT#/}/data/astra"
+    cipher_url="${VAULT_ADDR%/}/v1/${cipher_path}"
+
+    if vault_cipher_json=$(curl -sS -H "X-Vault-Token: ${VAULT_TOKEN}" "$cipher_url" 2>/dev/null); then
+      VAULT_APP_CIPHER=$(jq -r '.data.data.ASTRA_DB_APPLICATION_TOKEN // empty' <<<"$vault_cipher_json" 2>/dev/null || echo "")
+      VAULT_DB_CIPHER=$(jq -r '.data.data.ASTRA_DB_TOKEN // empty' <<<"$vault_cipher_json" 2>/dev/null || echo "")
+
+      if [[ "$VAULT_APP_CIPHER" == vault:v* && "$VAULT_DB_CIPHER" == vault:v* ]]; then
+        status_line "🟢" "KV ciphertext" "Transit ciphertext present in ${VAULT_KV_MOUNT}/astra."
+      else
+        status_line "🟠" "KV ciphertext" "kv/astra reachable, but ASTRA_DB_* do not look like Transit ciphertext (vault:v...)."
+        mark_orange
+      fi
+
+      # Try Transit decrypt of ASTRA_DB_TOKEN ciphertext from kv/astra
+      if [[ "$VAULT_DB_CIPHER" == vault:v* ]]; then
+        if ! have_cmd base64; then
+          status_line "🟠" "Transit decrypt" "base64 not found; cannot decode Transit plaintext."
+          mark_orange
+        else
+          decrypt_url="${VAULT_ADDR%/}/v1/transit/decrypt/${VAULT_TRANSIT_KEY}"
+          decrypt_body=$(jq -n --arg ct "$VAULT_DB_CIPHER" '{ciphertext:$ct}')
+
+          if decrypt_json=$(curl -sS \
+            -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            -d "$decrypt_body" \
+            "$decrypt_url" 2>/dev/null); then
+
+            PLAINTEXT_B64=$(jq -r '.data.plaintext // empty' <<<"$decrypt_json" 2>/dev/null || echo "")
+
+            if [[ -n "$PLAINTEXT_B64" ]]; then
+              DECRYPTED_ASTRA_DB_TOKEN="$(
+                printf '%s' "$PLAINTEXT_B64" | base64 --decode 2>/dev/null || echo ""
+              )"
+
+              if [[ -n "$DECRYPTED_ASTRA_DB_TOKEN" ]]; then
+                TRANSIT_DECRYPT_OK=true
+                status_line "🟢" "Transit decrypt" "Successfully decrypted ASTRA_DB_TOKEN via Transit (len=${#DECRYPTED_ASTRA_DB_TOKEN})."
+
+                # New: shape check that plaintext looks like an Astra token
+                if [[ "$DECRYPTED_ASTRA_DB_TOKEN" == AstraCS:* ]]; then
+                  if $SCRIPT_DEBUG; then
+                    echo "🔍 [DEBUG] Astra token prefix: ${DECRYPTED_ASTRA_DB_TOKEN:0:16}..."
+                  fi
+                else
+                  status_line "🟠" "Transit token shape" "Plaintext does not start with AstraCS:. Verify rotation logic."
+                  mark_orange
+                  if $SCRIPT_DEBUG; then
+                    echo "🔍 [DEBUG] Suspicious plaintext from Transit (first 32 chars):"
+                    printf '   %s\n' "${DECRYPTED_ASTRA_DB_TOKEN:0:32}"
+                  fi
+                fi
+              else
+                status_line "🟠" "Transit decrypt" "Plaintext decode failed for ASTRA_DB_TOKEN."
+                mark_orange
+              fi
+            else
+              status_line "🟠" "Transit decrypt" "Transit response missing .data.plaintext for ASTRA_DB_TOKEN."
+              mark_orange
+            fi
+          else
+            status_line "🔴" "Transit decrypt" "Failed to call transit/decrypt for '${VAULT_TRANSIT_KEY}'."
+            mark_red
+          fi
+        fi
+      fi
+    else
+      status_line "🟠" "KV ciphertext" "Unable to read ${VAULT_KV_MOUNT}/astra for ciphertext check."
+      mark_orange
+    fi
+  fi
+
+  hr
+fi
 
 # ---------------------------
 # Config alignment
@@ -477,22 +657,24 @@ else
   status_line "🟢" "Config drift" "Astra region aligned or single source (env or Vault)."
 fi
 
+token_or_transit_ok=false
+if [[ -n "$EFFECTIVE_ASTRA_DB_TOKEN" || $TRANSIT_TOKEN_OK == true ]]; then
+  token_or_transit_ok=true
+fi
+
 if [[ -n "$EFFECTIVE_ASTRA_DB_ID" && -n "$EFFECTIVE_ASTRA_DB_REGION" &&
-  -n "$EFFECTIVE_ASTRA_DB_KEYSPACE" && -n "$EFFECTIVE_ASTRA_DB_TOKEN" &&
-  -n "$EFFECTIVE_ASTRA_DB_ENDPOINT" ]]; then
-  status_line "🟢" "Effective config" "All effective Astra fields available (Vault preferred)."
+  -n "$EFFECTIVE_ASTRA_DB_KEYSPACE" && -n "$EFFECTIVE_ASTRA_DB_ENDPOINT" &&
+  $token_or_transit_ok == true ]]; then
+  status_line "🟢" "Effective config" "Astra metadata present; token supplied via Env/KV or Transit-backed backend."
 else
-  status_line "🟠" "Effective config" "Effective Astra config incomplete (missing ID/region/keyspace/token/endpoint)."
+  status_line "🟠" "Effective config" "Effective Astra config incomplete (metadata or token or Transit missing)."
   mark_orange
 fi
+
 hr
 
 # ---------------------------
-# SCB path resolution (new)
-# ---------------------------
-
-# ---------------------------
-# SCB path resolution (new)
+# SCB path resolution
 # ---------------------------
 
 resolve_bundle_path() {
@@ -503,13 +685,13 @@ resolve_bundle_path() {
     return
   fi
 
-  # Absolute path → keep as-is
+  # Absolute path -> keep as-is
   if [[ "$raw" = /* ]]; then
     echo "$raw"
     return
   fi
 
-  # Base directory is where the script is run from (repo root in your case)
+  # Base directory is where the script is run from
   local base_dir="$PWD"
 
   # Case 1: file exists as given (relative)
@@ -518,7 +700,7 @@ resolve_bundle_path() {
     return
   fi
 
-  # Case 2: common case → running from repo root, bundle lives in backend/
+  # Case 2: common case -> running from repo root, bundle lives in backend/
   if [[ -f "backend/$raw" ]]; then
     echo "${base_dir}/backend/${raw}"
     return
@@ -536,7 +718,7 @@ if $SCRIPT_DEBUG; then
 fi
 
 # ---------------------------
-# 6. Connectivity test via Astra REST (curl) – optional
+# Connectivity test via Astra REST (curl) - optional
 # ---------------------------
 
 CONNECTIVITY_ICON="⚪"
@@ -554,7 +736,8 @@ if $RUN_REST; then
       echo "🔍 [DEBUG] Token prefix: ${EFFECTIVE_ASTRA_DB_TOKEN:0:16}..."
     fi
 
-    resp_file="$(mktemp /tmp/astra_resp.XXXXXX)"
+    resp_file
+= "$(mktemp /tmp/astra_resp.XXXXXX)"
     http_code=$(curl -sS -o "$resp_file" -w "%{http_code}" \
       -H "X-Cassandra-Token: ${EFFECTIVE_ASTRA_DB_TOKEN}" \
       "$test_url" || echo "000")
@@ -572,26 +755,26 @@ if $RUN_REST; then
       ;;
     401 | 403)
       CONNECTIVITY_ICON="🔴"
-      CONNECTIVITY_DETAIL="Astra REST auth failed (HTTP ${http_code} – check token / roles)."
+      CONNECTIVITY_DETAIL="Astra REST auth failed (HTTP ${http_code} - check token or roles)."
       mark_red
       ;;
     404)
       CONNECTIVITY_ICON="🔴"
-      CONNECTIVITY_DETAIL="Astra REST returned 404 (check endpoint / region / DB id)."
+      CONNECTIVITY_DETAIL="Astra REST returned 404 (check endpoint or region or DB id)."
       mark_red
       ;;
     5*)
       CONNECTIVITY_ICON="🟠"
-      CONNECTIVITY_DETAIL="Astra REST returned ${http_code} (remote service issue – non-blocking)."
+      CONNECTIVITY_DETAIL="Astra REST returned ${http_code} (remote service issue - non blocking)."
       ;;
     000)
       CONNECTIVITY_ICON="🔴"
-      CONNECTIVITY_DETAIL="Astra REST call failed locally (HTTP 000 – network/DNS/TLS problem)."
+      CONNECTIVITY_DETAIL="Astra REST call failed locally (HTTP 000 - network, DNS, or TLS problem)."
       mark_red
       ;;
     *)
       CONNECTIVITY_ICON="🟠"
-      CONNECTIVITY_DETAIL="Astra REST returned unexpected code ${http_code} (non-blocking)."
+      CONNECTIVITY_DETAIL="Astra REST returned unexpected code ${http_code} (non blocking)."
       ;;
     esac
 
@@ -602,61 +785,70 @@ if $RUN_REST; then
     mark_orange
   fi
 
-  # Only print this section when REST was requested
   status_line "$CONNECTIVITY_ICON" "REST connectivity" "$CONNECTIVITY_DETAIL"
   hr
 fi
 
 # ---------------------------
-# 7. cqlsh secure-connect-bundle connectivity test (Astra)
+# cqlsh secure-connect-bundle connectivity test (Astra)
 # ---------------------------
+
 CQLSH_TIMEOUT_SECONDS="${CQLSH_TIMEOUT_SECONDS:-20}"
-CQLSH_CONNECTIVITY_ICON="⚪"
-CQLSH_CONNECTIVITY_DETAIL="cqlsh test skipped."
-
-# ---------------------------
-# 7. cqlsh secure-connect-bundle connectivity test (Astra)
-# ---------------------------
-
 CQLSH_CONNECTIVITY_ICON="⚪"
 CQLSH_CONNECTIVITY_DETAIL="cqlsh test skipped."
 
 if $CQLSH_OK; then
   if [[ -n "${EFFECTIVE_ASTRA_SCB_PATH_RESOLVED:-}" && -f "$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED" ]]; then
-    log "💾 Running Astra CQL connectivity test via cqlsh bundle..."
+    # Prefer Transit-decrypted token; fall back to legacy Env/KV if still present
+    ASTRA_TOKEN_FOR_CQL="${DECRYPTED_ASTRA_DB_TOKEN:-$EFFECTIVE_ASTRA_DB_TOKEN}"
 
-    if $SCRIPT_DEBUG; then
-      echo "🔍 [DEBUG] Bundle path (resolved): $EFFECTIVE_ASTRA_SCB_PATH_RESOLVED"
-      echo "🔍 [DEBUG] Running: cqlsh --secure-connect-bundle \"$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED\" -u token -p ***** -e \"DESCRIBE KEYSPACES;\""
-    fi
-
-    # Run cqlsh in a subshell so set -e does not kill the script on non-zero exit
-    CQLSH_OUTPUT="$(
-      cqlsh \
-        --secure-connect-bundle "$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED" \
-        -u token \
-        -p "$EFFECTIVE_ASTRA_DB_TOKEN" \
-        -e "DESCRIBE KEYSPACES;" 2>&1
-    )"
-    CQLSH_RC=$?
-
-    if [[ $CQLSH_RC -eq 0 ]]; then
-      CQLSH_CONNECTIVITY_ICON="🟢"
-      CQLSH_CONNECTIVITY_DETAIL="cqlsh connected successfully via secure connect bundle."
-      if $SCRIPT_DEBUG; then
-        echo "🔍 [DEBUG] cqlsh output:"
-        printf '   %s\n' "$CQLSH_OUTPUT"
-      fi
+    if [[ -z "$ASTRA_TOKEN_FOR_CQL" ]]; then
+      CQLSH_CONNECTIVITY_ICON="🟠"
+      CQLSH_CONNECTIVITY_DETAIL="No Astra token available for cqlsh (neither Transit nor Env/KV)."
+      mark_orange
     else
-      CQLSH_CONNECTIVITY_ICON="🔴"
-      CQLSH_CONNECTIVITY_DETAIL="cqlsh bundle connection failed (exit ${CQLSH_RC})."
-      mark_red
+      log "💾 Running Astra CQL connectivity test via cqlsh bundle..."
+
       if $SCRIPT_DEBUG; then
-        echo "🔍 [DEBUG] cqlsh error output:"
-        printf '   %s\n' "$CQLSH_OUTPUT"
+        echo "🔍 [DEBUG] Bundle path (resolved): $EFFECTIVE_ASTRA_SCB_PATH_RESOLVED"
+        if [[ -n "$DECRYPTED_ASTRA_DB_TOKEN" ]]; then
+          echo "🔍 [DEBUG] Using token source: Transit"
+        else
+          echo "🔍 [DEBUG] Using token source: Env/KV"
+        fi
+        echo "🔍 [DEBUG] Running: cqlsh --secure-connect-bundle \"$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED\" -u token -p ***** -e \"DESCRIBE KEYSPACES;\""
+      fi
+
+      # Temporarily disable 'set -e' so a failing cqlsh does not kill the whole script
+      set +e
+      CQLSH_OUTPUT="$(
+        CQLSH_NO_BUNDLED_PYTHON=1 \
+        cqlsh \
+          --secure-connect-bundle "$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED" \
+          -u token \
+          -p "$ASTRA_TOKEN_FOR_CQL" \
+          -e "DESCRIBE KEYSPACES;" 2>&1
+      )"
+      CQLSH_RC=$?
+      set -e
+
+      if [[ $CQLSH_RC -eq 0 ]]; then
+        CQLSH_CONNECTIVITY_ICON="🟢"
+        CQLSH_CONNECTIVITY_DETAIL="cqlsh connected successfully via secure connect bundle."
+        if $SCRIPT_DEBUG; then
+          echo "🔍 [DEBUG] cqlsh output:"
+          printf '   %s\n' "$CQLSH_OUTPUT"
+        fi
+      else
+        CQLSH_CONNECTIVITY_ICON="🟠"
+        CQLSH_CONNECTIVITY_DETAIL="cqlsh bundle connection failed (exit ${CQLSH_RC}) - treated as non blocking advanced check."
+        mark_orange
+        if $SCRIPT_DEBUG; then
+          echo "🔍 [DEBUG] cqlsh error output:"
+          printf '   %s\n' "$CQLSH_OUTPUT"
+        fi
       fi
     fi
-
   else
     if [[ -n "${EFFECTIVE_ASTRA_SCB_PATH_RESOLVED:-}" && ! -f "$EFFECTIVE_ASTRA_SCB_PATH_RESOLVED" ]]; then
       CQLSH_CONNECTIVITY_ICON="🔴"
@@ -691,7 +883,7 @@ if $HAS_TOKEN; then
 fi
 
 if $HAS_ID || $HAS_REGION || $HAS_KEYSPACE || $HAS_ENDPOINT; then
-  log "• Astra DB config (ID/region/keyspace/endpoint) in .env is 🟠 (move to Vault)."
+  log "• Astra DB config (ID or region or keyspace or endpoint) in .env is 🟠 (move to Vault)."
 elif ! $HAS_TOKEN; then
   log "• No Astra DB settings found in .env (from a secrets perspective) = 🟢"
 fi
@@ -708,7 +900,7 @@ if $RUN_REST; then
   case "$CONNECTIVITY_ICON" in
   "✅") log "• Astra can be reached with the credentials from Vault = ✅" ;;
   "🔴") log "• Astra connectivity test failed = 🔴" ;;
-  "🟠") log "• Astra connectivity test reported non-blocking REST warnings = 🟠" ;;
+  "🟠") log "• Astra connectivity test reported non blocking REST warnings = 🟠" ;;
   *) log "• Astra connectivity test not executed = ⚪" ;;
   esac
 fi

@@ -5,6 +5,13 @@ Dockerfile*
 docker-compose*
 backups/
 tmp/
+lib
+lib/**
+
+node_modules
+.nuxt
+output
+.git
 
 # Other common exclusions
 .git

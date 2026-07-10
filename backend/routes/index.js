@@ -274,6 +274,28 @@ router.get("/api/cql/health", cqlHealth);
 
 /**
  * @openapi
+ * /debug/astra:
+ *   get:
+ *     summary: Debug Astra Vault integration
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: Vault Astra integration status
+ */
+router.get("/debug/astra", (_req, res) => {
+  res.json({
+    hasAppToken: !!process.env.ASTRA_DB_APPLICATION_TOKEN,
+    hasDbToken: !!process.env.ASTRA_DB_TOKEN,
+    appLen: process.env.ASTRA_DB_APPLICATION_TOKEN?.length || 0,
+    dbLen: process.env.ASTRA_DB_TOKEN?.length || 0,
+    namespace: process.env.VAULT_NAMESPACE || null,
+    kvPath: process.env.VAULT_ASTRA_KV_PATH || "astra",
+    transitKey: process.env.VAULT_TRANSIT_KEY || "astra-transit",
+  });
+});
+
+/**
+ * @openapi
  * /artists/{id}:
  *   get:
  *     summary: Get artist by ID

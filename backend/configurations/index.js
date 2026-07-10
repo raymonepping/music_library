@@ -1,10 +1,11 @@
 // backend/config/index.js
 require("dotenv").config();
 const logger = require("./logger");
-const fetch = global.fetch || require("node-fetch");
+
+// Use our shared Vault client
+const { createVaultClient } = require("../services/vaultClient");
 
 // Swagger
-const swaggerUi = require("swagger-ui-express");
 const swaggerDocs = require("./swaggerOptions");
 
 const {
@@ -25,6 +26,7 @@ const {
   VAULT_KV_MOUNT = "kv",
   VAULT_SPOTIFY_PATH = "music",
   VAULT_DATASTAX_PATH = "datastax",
+  VAULT_NAMESPACE,
 
   // Sync tunables
   SYNC_PLAYLIST_PAGE_LIMIT = 25,
@@ -38,18 +40,29 @@ const {
   DEBUG = "false",
 } = process.env;
 
-// ---- Minimal KV reader ----
-async function readKvV2({ addr, token, mount, path }) {
-  const url = `${addr}/v1/${mount}/data/${encodeURIComponent(path)}`;
-  const res = await fetch(url, { headers: { "X-Vault-Token": token } });
+// Shared Vault client instance (lazy)
+let vaultClient = null;
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Vault read failed ${res.status}: ${text}`);
+function getVaultClient() {
+  if (!VAULT_ADDR || !VAULT_TOKEN) {
+    logger.warn(
+      "[config] VAULT_ADDR/VAULT_TOKEN missing, Vault-backed config will be skipped.",
+    );
+    return null;
   }
 
-  const json = await res.json();
-  return json?.data?.data || {};
+  if (!vaultClient) {
+    vaultClient = createVaultClient({
+      addr: VAULT_ADDR,
+      token: VAULT_TOKEN,
+      namespace: VAULT_NAMESPACE,
+      kvMount: VAULT_KV_MOUNT,
+      // Transit key not used here (only KV), but we keep a sane default
+      transitKey: process.env.VAULT_TRANSIT_KEY || "astra-transit",
+    });
+  }
+
+  return vaultClient;
 }
 
 // ---- Config object ----
@@ -71,6 +84,7 @@ const config = {
   VAULT_KV_MOUNT,
   VAULT_SPOTIFY_PATH,
   VAULT_DATASTAX_PATH,
+  VAULT_NAMESPACE,
 
   PLAYLIST_LIMIT: Number(SYNC_PLAYLIST_PAGE_LIMIT),
   TRACK_LIMIT: Number(SYNC_TRACK_PAGE_LIMIT),
@@ -78,7 +92,9 @@ const config = {
   MAX_TRACK_PAGES_PER_PLAYLIST: Number(SYNC_MAX_TRACK_PAGES_PER_PLAYLIST),
   TIME_BUDGET_MS: Number(SYNC_TIME_BUDGET_MS),
 
-  // Astra values (env are only fallbacks now, Vault is the source of truth)
+  // Astra values
+  // Tokens now come from Transit via initAstraSecrets().
+  // These envs are only fallbacks / metadata.
   ASTRA_DB_TOKEN: process.env.ASTRA_DB_TOKEN || process.env.APPLICATION_TOKEN,
   APPLICATION_TOKEN:
     process.env.APPLICATION_TOKEN || process.env.ASTRA_DB_TOKEN,
@@ -90,35 +106,21 @@ const config = {
 
   // Extra configs
   loggerConfig: require("./logger"),
-  swaggerOptions: require("./swaggerOptions"),
+  swaggerOptions: swaggerDocs,
 };
 
-// ---- Load Datastax creds from Vault ----
+// ---- Load Datastax metadata from Vault (no tokens here anymore) ----
 async function loadDatastaxFromVault() {
-  if (!config.VAULT_ADDR || !config.VAULT_TOKEN) {
-    logger.warn(
-      "[config] VAULT_ADDR/VAULT_TOKEN missing, skipping Vault Datastax secrets.",
-    );
+  const client = getVaultClient();
+  if (!client) {
     return;
   }
 
   try {
-    const data = await readKvV2({
-      addr: config.VAULT_ADDR,
-      token: config.VAULT_TOKEN,
-      mount: config.VAULT_KV_MOUNT,
-      path: config.VAULT_DATASTAX_PATH,
-    });
+    const data = await client.readKvV2(VAULT_DATASTAX_PATH);
 
-    const vaultToken =
-      data.ASTRA_DB_TOKEN ||
-      data.APPLICATION_TOKEN ||
-      data.ASTRA_DB_APPLICATION_TOKEN;
-
-    if (vaultToken) {
-      config.ASTRA_DB_TOKEN = vaultToken;
-      config.APPLICATION_TOKEN = vaultToken;
-    }
+    // Do NOT override the Astra token here anymore.
+    // Transit + initAstraSecrets is now the source of truth.
 
     config.ASTRA_DB_ID = data.ASTRA_DB_ID || config.ASTRA_DB_ID;
     config.ASTRA_DB_REGION = data.ASTRA_DB_REGION || config.ASTRA_DB_REGION;
@@ -141,34 +143,24 @@ async function loadDatastaxFromVault() {
         ASTRA_DB_KEYSPACE: config.ASTRA_DB_KEYSPACE,
         ASTRA_SCB_PATH: config.ASTRA_SCB_PATH,
         ASTRA_DB_ENDPOINT: config.ASTRA_DB_ENDPOINT,
-        ASTRA_DB_TOKEN: config.ASTRA_DB_TOKEN
-          ? `${config.ASTRA_DB_TOKEN.substring(0, 12)}...`
-          : null,
       });
     }
   } catch (e) {
     logger.error(
-      `[config] Failed to load Datastax secrets from Vault: ${e.message}`,
+      `[config] Failed to load Datastax metadata from Vault: ${e.message}`,
     );
   }
 }
 
-// ---- Load Spotify + HF creds from Vault ----
+// ---- Load Spotify + HF creds from Vault (still KV) ----
 async function loadSpotifyFromVault() {
-  if (!config.VAULT_ADDR || !config.VAULT_TOKEN) {
-    logger.warn(
-      "[config] VAULT_ADDR/VAULT_TOKEN missing, skipping Vault Spotify secrets.",
-    );
+  const client = getVaultClient();
+  if (!client) {
     return;
   }
 
   try {
-    const data = await readKvV2({
-      addr: config.VAULT_ADDR,
-      token: config.VAULT_TOKEN,
-      mount: config.VAULT_KV_MOUNT,
-      path: config.VAULT_SPOTIFY_PATH,
-    });
+    const data = await client.readKvV2(VAULT_SPOTIFY_PATH);
 
     config.CLIENT_ID = data.CLIENT_ID || data.client_id || config.CLIENT_ID;
     config.CLIENT_SECRET =
